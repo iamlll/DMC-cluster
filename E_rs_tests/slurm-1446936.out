@@ -1,0 +1,91 @@
+Date              = Tue Jun 21 14:26:52 EDT 2022
+Hostname          = worker1057
+Working Directory = /mnt/ceph/users/llin1/E_rs_tests
+
+Number of Nodes Allocated = 1
+Number of Tasks Allocated = 8
+
+Currently Loaded Modules:
+  1) modules/1.58-20220124     (S)   4) pyscf/2.0.1
+  2) gcc/7.5.0                       5) slurm         (S)
+  3) intel-oneapi-mkl/2022.0.1 (S)   6) python/3.8.12
+
+  Where:
+   S:  Module is Sticky, requires --force to unload or purge
+
+ 
+
+Tue Jun 21 14:26:55 EDT 2022
+.csv
+0.05 44
+.csv
+0.1 44
+.csv
+0.15 43
+.csv
+0.2 44
+.csv
+0.4 44
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/ewald.py:250: RuntimeWarning: divide by zero encountered in true_divide
+  cij += gpu.erfc(self.alpha * r) / r
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/accumulators.py:140: RuntimeWarning: divide by zero encountered in true_divide
+  r = 1.0 / grad2
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/accumulators.py:147: RuntimeWarning: invalid value encountered in add
+  f = a * r + b * r ** 2 + c * r ** 3
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/accumulators.py:140: RuntimeWarning: divide by zero encountered in true_divide
+  r = 1.0 / grad2
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/accumulators.py:147: RuntimeWarning: invalid value encountered in add
+  f = a * r + b * r ** 2 + c * r ** 3
+Traceback (most recent call last):
+  File "testphonons.py", line 544, in <module>
+Traceback (most recent call last):
+  File "testphonons.py", line 544, in <module>
+    df = simple_dmc(
+  File "testphonons.py", line 245, in simple_dmc
+    df = simple_dmc(
+  File "testphonons.py", line 245, in simple_dmc
+    configs = wf.setup(pos)
+  File "/mnt/ceph/users/llin1/E_rs_tests/updatedjastrow.py", line 48, in setup
+    configs = wf.setup(pos)
+  File "/mnt/ceph/users/llin1/E_rs_tests/updatedjastrow.py", line 48, in setup
+    with h5py.File(filename, 'r') as f:
+  File "/cm/shared/sw/nix/store/mmjyg0figxiv63a170dvx7xjvr6jh21h-python-3.8.12-view/lib/python3.8/site-packages/h5py/_hl/files.py", line 507, in __init__
+    with h5py.File(filename, 'r') as f:
+  File "/cm/shared/sw/nix/store/mmjyg0figxiv63a170dvx7xjvr6jh21h-python-3.8.12-view/lib/python3.8/site-packages/h5py/_hl/files.py", line 507, in __init__
+    fid = make_fid(name, mode, userblock_size, fapl, fcpl, swmr=swmr)    
+fid = make_fid(name, mode, userblock_size, fapl, fcpl, swmr=swmr)  File "/cm/shared/sw/nix/store/mmjyg0figxiv63a170dvx7xjvr6jh21h-python-3.8.12-view/lib/python3.8/site-packages/h5py/_hl/files.py", line 220, in make_fid
+
+  File "/cm/shared/sw/nix/store/mmjyg0figxiv63a170dvx7xjvr6jh21h-python-3.8.12-view/lib/python3.8/site-packages/h5py/_hl/files.py", line 220, in make_fid
+    fid = h5f.open(name, flags, fapl=fapl)
+      File "h5py/_objects.pyx", line 54, in h5py._objects.with_phil.wrapper
+fid = h5f.open(name, flags, fapl=fapl)
+  File "h5py/_objects.pyx", line 54, in h5py._objects.with_phil.wrapper
+  File "h5py/_objects.pyx", line 55, in h5py._objects.with_phil.wrapper
+  File "h5py/_objects.pyx", line 55, in h5py._objects.with_phil.wrapper
+  File "h5py/h5f.pyx", line 106, in h5py.h5f.open
+  File "h5py/h5f.pyx", line 106, in h5py.h5f.open
+FileNotFoundError: [Errno 2] Unable to open file (unable to open file: name = 'wffiles/opt-rs6.h5', errno = 2, error message = 'No such file or directory', flags = 0, o_flags = 0)
+FileNotFoundError: [Errno 2] Unable to open file (unable to open file: name = 'wffiles/opt-rs7.h5', errno = 2, error message = 'No such file or directory', flags = 0, o_flags = 0)Closing remaining open files:
+data/DMC_bcc_with_phonons_rs_6_popsize_32_seed_0_N_10_eta_0.20_U_50.00_tau_0.3.h5...Closing remaining open files:data/DMC_bcc_with_phonons_rs_7_popsize_32_seed_0_N_10_eta_0.20_U_50.00_tau_0.35.h5...done
+done
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/accumulators.py:140: RuntimeWarning: divide by zero encountered in true_divide
+  r = 1.0 / grad2
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/accumulators.py:147: RuntimeWarning: invalid value encountered in add
+  f = a * r + b * r ** 2 + c * r ** 3
+Traceback (most recent call last):
+  File "testphonons.py", line 544, in <module>
+    df = simple_dmc(
+  File "testphonons.py", line 245, in simple_dmc
+    configs = wf.setup(pos)
+  File "/mnt/ceph/users/llin1/E_rs_tests/updatedjastrow.py", line 48, in setup
+    with h5py.File(filename, 'r') as f:
+  File "/cm/shared/sw/nix/store/mmjyg0figxiv63a170dvx7xjvr6jh21h-python-3.8.12-view/lib/python3.8/site-packages/h5py/_hl/files.py", line 507, in __init__
+    fid = make_fid(name, mode, userblock_size, fapl, fcpl, swmr=swmr)
+  File "/cm/shared/sw/nix/store/mmjyg0figxiv63a170dvx7xjvr6jh21h-python-3.8.12-view/lib/python3.8/site-packages/h5py/_hl/files.py", line 220, in make_fid
+    fid = h5f.open(name, flags, fapl=fapl)
+  File "h5py/_objects.pyx", line 54, in h5py._objects.with_phil.wrapper
+  File "h5py/_objects.pyx", line 55, in h5py._objects.with_phil.wrapper
+  File "h5py/h5f.pyx", line 106, in h5py.h5f.open
+FileNotFoundError: [Errno 2] Unable to open file (unable to open file: name = 'wffiles/opt-rs5.h5', errno = 2, error message = 'No such file or directory', flags = 0, o_flags = 0)
+Closing remaining open files:data/DMC_bcc_with_phonons_rs_5_popsize_32_seed_0_N_10_eta_0.20_U_50.00_tau_0.25.h5...done
+Tue Jun 21 14:28:16 EDT 2022

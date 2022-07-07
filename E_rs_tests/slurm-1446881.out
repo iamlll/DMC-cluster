@@ -1,0 +1,25 @@
+Date              = Tue Jun 21 13:43:28 EDT 2022
+Hostname          = worker1031
+Working Directory = /mnt/ceph/users/llin1/E_rs_tests
+
+Number of Nodes Allocated = 1
+Number of Tasks Allocated = 8
+
+Currently Loaded Modules:
+  1) modules/1.58-20220124     (S)   4) pyscf/2.0.1
+  2) gcc/7.5.0                       5) slurm         (S)
+  3) intel-oneapi-mkl/2022.0.1 (S)   6) python/3.8.12
+
+  Where:
+   S:  Module is Sticky, requires --force to unload or purge
+
+ 
+
+Tue Jun 21 13:43:33 EDT 2022
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/ewald.py:250: RuntimeWarning: divide by zero encountered in true_divide
+  cij += gpu.erfc(self.alpha * r) / r
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/ewald.py:250: RuntimeWarning: divide by zero encountered in true_divide
+  cij += gpu.erfc(self.alpha * r) / r
+/mnt/home/pyang/soft/pymods/pyqmc/pyqmc/ewald.py:250: RuntimeWarning: divide by zero encountered in true_divide
+  cij += gpu.erfc(self.alpha * r) / r
+Tue Jun 21 13:45:27 EDT 2022
