@@ -28,7 +28,7 @@ def FitData(xvals, yvals, yerr=[], fit='lin', extrap=[]):
         ans = np.array([fitlinear(x,a,b) for x in xvals])
     
     textstr = '\n'.join((
-        r'$E(\tau) = a\tau + b$',
+        r'$E(\sqrt{t}) = a\sqrt{t} + b$',
         r'$a=%.4f \pm %.4f$' % (a, aerr),
         r'$b=%.6f \pm %.6f$' % (b, berr)
         ))
@@ -36,7 +36,7 @@ def FitData(xvals, yvals, yerr=[], fit='lin', extrap=[]):
     print(textstr)
     return ans, textstr
 
-def Get_h5_steps(filename,tequil=20):
+def Get_h5_steps(filename,tequil=None):
     ''' Extract phonon distributions (Nwalkers x Nkpoints) + electron separation distance array (Nwalkers-length vector) from h5py file'''
 
     f = h5py.File(filename,'r')
@@ -45,9 +45,7 @@ def Get_h5_steps(filename,tequil=20):
     arrstep = f.get('meta/arrstep')[0,0]
     Nsteps = f.get('meta/Nsteps')[0,0]
     Nw = f.get('meta/nconfig')[0,0]
-    nequil = int(tequil/tau)
-    
-    Nt=int(Nsteps/arrstep) #will erase 0 cols at end (keys are unsorted so it's easiest to first just shove everything into an array and then cut it down), so no -int(nequil/arrstep)
+    Nt=int(Nsteps/arrstep)+1 #will erase 0 cols at end (keys are unsorted so it's easiest to first just shove everything into an array and then cut it down), so no -int(nequil/arrstep)
     print(Nt)
     keys = list(f.keys())
     temp = re.compile("([a-zA-Z]+)([0-9]+)")
@@ -64,27 +62,27 @@ def Get_h5_steps(filename,tequil=20):
         except AttributeError:
             # doesn't correspond to a data header entry of "step#"
             continue
-        if int(res[1]) < nequil:
-            if int(res[1]) == 0: minid = i
-            continue
+        if int(res[1]) == 0: 
+            minid = i
+            print('minid',minid)
         # now want to sort through these in order, loop through them and extract each set of f_k and n_k (also distances r), then concatenate them to make a giant array
         f_ks = np.array(f.get(test_str + '/f_ks'))
+        n_ks = np.array(f.get(test_str+'/n_ks'))
         # if f_ks is 2D (Nkpts x Nwalkers), average over all walkers at each k-point and find the SD
         if len(f_ks.shape) > 1:
             f_ks = f_ks.mean(axis=1)
+        if len(n_ks.shape) > 1:
+            n_ks = n_ks.mean(axis=1)
          
-        n_ks = np.array(f.get(test_str+'/n_ks'))
         edists = np.array(f.get(test_str+'/dists')) #dist bw elecs
-        farray[i-minid,:] = f_ks 
-        narray[i-minid,:] = n_ks 
-        darray[i-minid,:] = edists 
-        ts[i-minid] = int(res[1])   
-         
-    zidx = ~np.all(darray==0,axis=1)
-    darray = darray[zidx,:]
-    farray = farray[zidx,:]
-    narray = narray[zidx,:]
-    ts = ts[zidx]
+        j=i-minid
+        farray[j,:] = f_ks 
+        # ferr = np.std(f_ks,axis=1)/nconfig
+        # nerr = np.std(n_ks,axis=1)/nconfig
+        narray[j,:] = n_ks 
+        darray[j,:] = edists 
+        ts[j] = int(res[1])   
+
     tidx = np.argsort(ts)
     darray = darray[tidx,:]
     farray = farray[tidx,:]
@@ -124,42 +122,67 @@ def Phonon_Mom_Density_h5(filename):
     plt.tight_layout()
     plt.show()
 
-def Elec_sep_dist(filename):
+def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False):
     '''
     Electron separation distance histogram
     '''    
-    f,steps,_,_,dists = Get_h5_steps(filename)
-    rs = dists.flatten()
-    l = f.get('meta/l')[0,0]
-    eta = f.get('meta/eta')[0,0]
-    alpha = f.get('meta/alpha')[0,0]
-    tau = f.get('meta/tau')[0,0]
-    r_s = f.get('meta/rs')[0,0]
+    if len(labels)==0:
+        labels = np.full(len(filenames),'',dtype=str)
     fig,ax = plt.subplots(1,1,figsize=(5,7))
-    # currently can only process one tau value at a time
-    ax.hist(rs)
-    ax.set_xlabel('$|\\vec r_{12}|$')
-    ax.set_ylabel('count')
-    fig.suptitle('$\eta=%.2f,\,U=%.2f,\,r_s = %d$' %(eta,2*l,r_s))
+ 
+    for i,filename in enumerate(filenames):
+        f,steps,_,_,dists = Get_h5_steps(filename)
+        rs = dists.flatten()
+        #print(list(f.get('meta')))
+        L = f.get('meta/L')[0,0]
+        print('L',L)
+        l = f.get('meta/l')[0,0]
+        print('l',l)
+        eta = f.get('meta/eta')[0,0]
+        alpha = f.get('meta/alpha')[0,0]
+        tau = f.get('meta/tau')[0,0]
+        r_s = f.get('meta/rs')[0,0]
+        print('r_s',r_s)
+        Nsteps = f.get('meta/Nsteps')[0,0]
+        Nw = f.get('meta/nconfig')[0,0]
+        ph = f.get('meta/ph_bool')[0,0]
+        diff = f.get('meta/diffusion')[0,0]
+        avgdists = np.mean(dists,axis=1)
+        d_err = np.std(dists,axis=1)/Nw
+        ts = steps*tau
+        if tequil is None: tequil = Nsteps*tau/3
+        print(tequil)
+        nequil = int(tequil/tau)
+        print(tau)
 
-    fig2,ax2 = plt.subplots(1,1)
-    avgdists = np.mean(dists,axis=1)
-    d_err = np.std(dists,axis=1)
-    
-    #ax2.plot(ts,avgdists)
-    ts = steps*tau
-    ax2.errorbar(np.sqrt(ts),avgdists,yerr=d_err)
-    ax2.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
-    ax2.set_ylabel('$|\\vec r_{12}|$')
-    ax2.set_title('Averaged over $N_w=$%d walkers' %dists.shape[1])
+        if diff == 1:
+            labels[i] = 'diffusion'
+            if fit:
+                minid = np.argmin(np.abs(ts-tequil)) #find point closest to equilibration time
+                               
+                linfit,txt = FitData(np.sqrt(ts[minid:]),avgdists[minid:],yerr=d_err[minid:])    
+                ax.plot(np.sqrt(ts[minid:]),linfit,'r-',zorder=10,label='diff fit')
+                ax.text(0.75, 0.2, txt, horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
+                print(txt)
+        elif diff == 0 and ph == 0: labels[i] = 'jellium'
+        else: labels[i] = 'elec+ph'
+
+        ax.plot(np.sqrt(ts),avgdists,label=labels[i])
+        ax.axvline(np.sqrt(tequil),color='g',linestyle='--')
+       
+    ax.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
+    ax.set_ylabel('$|\\vec r_{12}|$')
+    ax.set_title('Averaged over $N_w=$%d walkers' %dists.shape[1])
+    ax.legend()
     plt.tight_layout()
     plt.show()
 
 if __name__ == '__main__':
   #main(['energytotal',])
-  filename = sys.argv[1]
+  filenames = sys.argv[1:]
   #f = h5py.File(filename,'r')
   #print(list(f.keys()))
   #Get_h5_steps(f)
   #Phonon_Mom_Density_h5(f)
-  Elec_sep_dist(filename)
+ 
+  Elec_sep_dist(filenames,fit=True,tequil=500)

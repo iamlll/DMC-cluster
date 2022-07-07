@@ -158,13 +158,14 @@ def acceptance(posold, posnew, driftold, driftnew, tau, wf):
     ratio = wf.val(posnew) ** 2 / wf.val(posold) ** 2
     return np.minimum(1,ratio * gfratio)
 
-def popcontrol(pos, weight, wavg, wtot):
+def popcontrol(pos, weight, f_ks, wavg, wtot):
     probability = np.cumsum(weight / wtot)
     randnums = np.random.random(nconfig)
     new_indices = np.searchsorted(probability, randnums)
     posnew = pos[new_indices, :, :]
+    newf_ks = f_ks[:,new_indices]
     weight.fill(wavg)
-    return posnew, weight
+    return posnew, newf_ks, weight
 
 def plotamps(kcopy, n_ks, N):
     # f_ks: (# ks) x (nconfig) array of coherent state amplitudes. Want to make histogram of f_ks vs |k| for final config of f_ks.
@@ -183,20 +184,30 @@ def plotamps(kcopy, n_ks, N):
     plt.show()
     #want to find the relationship between k_cut and L 
 
-def InitPos(wf,opt='rand'):
+def InitPos(wf,opt='rand',d=None):
     if opt == 'bcc':
         #initialize one electron at center of box and the other at the corner
+        # i.e. put the elecs as far away from each other as possible
         pos= np.zeros((wf.nconfig, wf.nelec, wf.ndim))
         pos0 = np.full((wf.nconfig, wf.ndim),wf.L/2)
         pos1 = np.full((wf.nconfig, wf.ndim),wf.L)
         pos[:,0,:] = pos0
         pos[:,1,:] = pos1
+    elif opt == 'bind':
+        # configuration more conducive to binding - put elecs close together, with sep dist ~ phonon length scale
+        if d is not None: 
+            #randomly place the first electron, then place the 2nd electron a distance l away
+            pos= np.zeros((wf.nconfig, wf.nelec, wf.ndim))
+            pos[:,0,:] = wf.L* np.random.rand(wf.nconfig, wf.ndim)
+            pos[:,1,:] = pos[:,0,:] + np.tile([d,0,0],(wf.nconfig,1))
+        else:
+            print('Invalid choice of electron separation distance')
     else:    
         pos= wf.L* np.random.rand(wf.nconfig, wf.nelec, wf.ndim)
     return pos
 
 from itertools import product
-def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=True,phonon=True,l=l,eta=eta_STO,gth=True,h5name="dmc.h5"):
+def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, nstep=None,N=5, L=10,elec=True,phonon=True,l=l,eta=eta_STO,gth=True,h5name="dmc.h5",resume=0):
     """
   Inputs:
   L: box length (units of a0)
@@ -213,16 +224,20 @@ def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=Tr
   A Pandas dataframe with each 
   """
     from time import time
-    df = {
-        "step": [],
-        "ke_coul": [],
-        "elocal": [],
-        "egth": [],
-        "weight": [],
-        "eref": [],
-    }
     # use HDF file for large data output
-    h5file = config_h5.open_write(h5name)
+    if resume:
+        df = pd.read_csv(os.path.splitext(h5name)[0] + '.csv')
+        h5file = config_h5.open_append(h5name)
+    else:
+        df = {
+            "step": [],
+            "ke_coul": [],
+            "elocal": [],
+            "egth": [],
+            "weight": [],
+            "eref": [],
+        }
+        h5file = config_h5.open_write(h5name)
 
     alpha = (1-eta)*l
     print('alpha',alpha)
@@ -230,10 +245,16 @@ def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=Tr
     g = 1./l**2*np.sqrt(np.pi*alpha*l/L**3) #DOS, all lengths in units of Bohr radii a0
 
     nconfig = pos.shape[0]
-    nstep = int(tproj/tau)
-    print(nstep)
 
-    meta = {'tau': tau, 'l': l, 'eta': eta, 'rs': wf.rs, 'L': L, 'N_cut': N, 'g': g, 'alpha': alpha, 'nconfig': nconfig, 'popstep':popstep, 'arrstep': arrstep,'elec_bool': elec,'ph_bool': phonon, 'gth_bool': gth, 'tproj': tproj, 'Nsteps': nstep }  # add more as needed
+    if resume:
+        nstep_old = h5file.get('meta/Nsteps')[0,0]
+        nstep = nstep + nstep_old
+        pos = np.array(h5file.get('%d/pos' %nstep_old-arrstep))
+    else:
+        nstep_old = 0
+
+    print(nstep)
+    meta = {'tau': tau, 'l': l, 'eta': eta, 'rs': wf.rs, 'L': L, 'N_cut': N, 'g': g, 'alpha': alpha, 'nconfig': nconfig, 'popstep':popstep, 'arrstep': arrstep,'elec_bool': elec,'ph_bool': phonon, 'gth_bool': gth, 'tproj': tproj, 'Nsteps': nstep, 'diffusion':int(wf.diffusion) }  # add more as needed
     # turn each value into an array
     for key, val in meta.items():
         meta[key] = [val]
@@ -247,25 +268,32 @@ def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=Tr
         print("Incompatible number of walkers: sim nconfig = " + str(nconfig) + ", but wf nconfig = " + str(wf.nconfig) + ". Please re-run step1_opt.py for " + str(nconfig) + " walkers, then try again. Exiting program...")
         return
 
-    #Make a supercell/box
-    #k = (nx, ny, nz)*2*pi/L for nx^2+ny^2+nz^2 <= n_c^2 for cutoff value n_c = N, where n_c -> inf is the continuum limit. 
-    #A k-sphere cutoff is conventional as it specifies a unique KE cutoff
-    ks = 2*np.pi/L* np.array([[nx,ny,nz] for nx,ny,nz in product(range(-N,N+1), range(-N,N+1), range(-N,N+1)) if nx**2+ny**2+nz**2 <= N**2 ])
+    if resume:
+        ks = np.array(h5file.get('ks'))
+        kmag = np.array(h5file.get('kmag'))
+        f_ks = np.array(h5file.get('%d/f_ks' %nstep_old-arrstep))
+        h_ks = np.array(h5file.get('%d/f_ks' %nstep_old-arrstep))
+    else:
+        #Make a supercell/box
+        #k = (nx, ny, nz)*2*pi/L for nx^2+ny^2+nz^2 <= n_c^2 for cutoff value n_c = N, where n_c -> inf is the continuum limit. 
+        #A k-sphere cutoff is conventional as it specifies a unique KE cutoff
+        ks = 2*np.pi/L* np.array([[nx,ny,nz] for nx,ny,nz in product(range(-N,N+1), range(-N,N+1), range(-N,N+1)) if nx**2+ny**2+nz**2 <= N**2 ])
 
-    kmag = np.sum(ks**2,axis=1)**0.5 #find k magnitudes
-    #delete \vec k = 0
-    idx = np.where(kmag !=0)[0]
-    ks = ks[idx]
-    kmag = kmag[idx]
+        kmag = np.sum(ks**2,axis=1)**0.5 #find k magnitudes
+        #delete \vec k = 0
+        idx = np.where(kmag !=0)[0]
+        ks = ks[idx]
+        kmag = kmag[idx]
+        
+        #initialize f_ks
+        f_ks = init_f_k(ks, kmag, g, nconfig)
+        if phonon == False: f_ks.fill(0.)
+        h_ks = f_ks #this describes our trial wave fxn coherent state amplitudes
+        #print(h_ks)
+        #egth,_ = gth_estimator(pos, wf, configs, g, tau,h_ks, f_ks, ks, kcopy,phonon)
     
     kcopy = np.array([[ kmag[i] for j in range(nconfig)] for i in range(len(kmag))]) # (# ks) x nconfig matrix
 
-    #initialize f_ks
-    f_ks = init_f_k(ks, kmag, g, nconfig)
-    if phonon == False: f_ks.fill(0.)
-    h_ks = f_ks #this describes our trial wave fxn coherent state amplitudes
-    #print(h_ks)
-    #egth,_ = gth_estimator(pos, wf, configs, g, tau,h_ks, f_ks, ks, kcopy,phonon)
     #print(np.mean(eloc))
     rho, _ = update_f_ks(pos, wf, g, tau, h_ks, f_ks, ks, kcopy,phonon)
     ke_coul = GetEnergy(wf,configs,pos,'total')
@@ -281,7 +309,7 @@ def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=Tr
       update_coherent = 0.0,
       branch = 0.0,
     )
-    for istep in range(nstep):
+    for istep in range(nstep_old,nstep):
         tick = time()
         if elec == True:
             driftold = tau * wf.grad(pos)
@@ -292,11 +320,7 @@ def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=Tr
             driftnew = tau * wf.grad(posnew)
             acc = acceptance(pos, posnew, driftold, driftnew, tau, wf)
             imove = acc > np.random.random(nconfig)
-            #print('old')
-            #print(pos[0,:,:])
             pos[imove,:, :] = posnew[imove,:, :]
-            #print('new')
-            #print(pos[0,:,:])
             acc_ratio = np.sum(imove) / nconfig
         tock = time()
         timers['drift_diffusion'] += tock - tick
@@ -321,7 +345,6 @@ def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=Tr
         timers['gth_estimator'] += tock - tick
         #syncs internal wf configs object + driver configs object
         f_ks = f2p
-        n_ks = f_ks* np.conj(h_ks) #n_k = hw a*a; momentum distribution of equilibrium phonons -- want to plot this as a function of |k|
 
         oldwt = np.mean(weight)
         weight = weight* np.exp(-0.5* tau * (elocold + eloc - 2*eref))
@@ -333,11 +356,12 @@ def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=Tr
         wavg = wtot / nconfig
         if elec == True:
             if istep % popstep == 0:
-                pos, weight = popcontrol(pos, weight, wavg, wtot)
+                pos, f_ks,weight = popcontrol(pos, weight, f_ks,wavg, wtot)
                 wf.update(configs,pos)
         tock = time()
         timers['branch'] += tock - tick
 
+        n_ks = f_ks* np.conj(h_ks) #n_k = hw a*a; momentum distribution of equilibrium phonons -- want to plot this as a function of |k|
         # Update the reference energy
         Delta = -1./tau* np.log(wavg/oldwt) #need to normalize <w_{n+1}>/<w_n>
         eref = eref + Delta
@@ -368,14 +392,13 @@ def simple_dmc(wf, tau, pos, popstep=10, arrstep=10,tproj=128, N=5, L=10,elec=Tr
         if istep % arrstep == 0:
             grp = h5file.create_group(h5file.root, 'step%d' % istep)
             big_data = {
-                'n_ks': n_ks.mean(axis=1),
-                'f_ks': f_ks.mean(axis=1),
-                'n_ks_err': np.std(n_ks,axis=1),
-                'f_ks_err':np.std(f_ks,axis=1),
+                'n_ks': n_ks,
+                'f_ks': f_ks,
                 'dists': np.sqrt(np.sum((pos[:,0,:]-pos[:,1,:])**2,axis=1))
             }
             config_h5.save_dict(big_data, h5file, slab=grp)
-    config_h5.save_dict({'kmags': kmag, 'ks':ks, 'h_ks': h_ks.mean(axis=1),'h_ks_err': np.std(h_ks,axis=1)}, h5file)
+    saver = {'kmags': kmag, 'ks':ks, 'h_ks': h_ks,'pos':pos}
+    config_h5.save_dict(saver, h5file)
     #save timings in h5 file also
     config_h5.save_dict(timers, h5file, metagrp)
    
@@ -492,34 +515,53 @@ if __name__ == "__main__":
     parser.add_argument('--elec', type=int, default=1) #on/off switch for electrons
     parser.add_argument('--ph', type=int, default=1) #on/off switch for phonons
     parser.add_argument('--Ncut',type=int,default=10) # defines spherical momentum cutoff k_cut = 2pi*N/L
+    parser.add_argument('--Nstep',type=int) # number of steps in simulation
     parser.add_argument('--tproj',type=int,default=128) # projection time = tau * nsteps
     parser.add_argument('--l',type=int,default=l) #plays the role of the electron coupling strength U 
     parser.add_argument('--eta',type=np.float64,default=eta_STO) 
     parser.add_argument('--gth',type=int,default=1) #on/off switch for growth estimator
     parser.add_argument('--outdir',type=str,default='data') 
-    parser.add_argument('--init',type=str,default='bcc') 
-    parser.add_argument('--tau',type=np.float64) # numbers to divide r_s by
+    parser.add_argument('--init',type=str,default='bind') 
+    parser.add_argument('--tau',type=np.float64)
+    parser.add_argument('--diffusion',type=int,default=0) # on/off switch for diffusion (jellium, no Coulomb)
+    parser.add_argument('--resume',type=int,default=0) # whether to resume the simulation from a previous file  
 
     args = parser.parse_args()
 
     r_s = args.rs  # inter-electron spacing, controls density
     tau = args.tau
-    if tau is None: tau = rs/40 
+    print(tau)
+    if tau is None: tau = r_s/40 
 
     nconfig = args.nconf #default is 5000
     seed = args.seed
     elec_bool = args.elec > 0
-    ph_bool = args.ph > 0
     gth_bool = args.gth > 0
+    diffusion = args.diffusion > 0
+    resume = args.resume > 0
+    if diffusion:
+        ph_bool = 0
+    else:
+        ph_bool = args.ph > 0
+    print('diffusion',diffusion)
+
     N = args.Ncut
     tproj = args.tproj #projection time = tau * nsteps
     init = args.init
-
-    wf = UpdatedJastrow(r_s,nconfig=nconfig)
+    Nstep=args.Nstep
+    '''    
+    if Nstep is None:
+        Nstep = int(tproj/tau)
+    else:
+        # if num of sim steps is specified, this determines the sim projection time
+        tproj = Nstep*tau
+    '''
+    wf = UpdatedJastrow(r_s,nconfig=nconfig,diffusion=diffusion)
     print(wf.L)
 
     # Modify the Frohlich coupling constant alpha = (1-eta)*\tilde l
     l = args.l
+    print('l',l)
     eta = args.eta
     datadir = args.outdir
     print(datadir)
@@ -527,20 +569,20 @@ if __name__ == "__main__":
         print('Making data directory...')
         os.mkdir(datadir) 
  
-    filename = "DMC_{9}_el{8}_ph{7}_rs_{0}_popsize_{1}_seed_{2}_N_{3}_eta_{4:.2f}_U_{5:.2f}_tproj_{6}".format(r_s, nconfig, seed, N,eta,l,tproj,int(ph_bool),int(elec_bool),init)
+    filename = "DMC_{9}_diffusion_{10}_el{8}_ph{7}_rs_{0}_popsize_{1}_seed_{2}_N_{3}_eta_{4:.2f}_l_{5:.2f}_nstep_{6}".format(r_s, nconfig, seed, N,eta,l,Nstep,int(ph_bool),int(elec_bool),init,int(diffusion))
     print(filename)
     print('elec',elec_bool)
     print('ph',ph_bool)
     print('gth',gth_bool)
    
-    LLP = -alpha/(2*l**2) #-alpha hw energy lowering for single polaron
-    feyn = (-alpha -0.98*(alpha/10)**2 -0.6*(alpha/10)**3)/(2*l**2)
+    #LLP = -alpha/(2*l**2) #-alpha hw energy lowering for single polaron
+    #feyn = (-alpha -0.98*(alpha/10)**2 -0.6*(alpha/10)**3)/(2*l**2)
     print('N',N)
-    print('LLP',2*LLP)
-    print('Feyn',feyn)
+    #print('LLP',2*LLP)
+    #print('Feyn',feyn)
     np.random.seed(seed)
     tic = time.perf_counter()
-    initpos = InitPos(wf,init) 
+    initpos = InitPos(wf,init,d=1) 
     filename = os.path.join(datadir,filename + '_tau_' + str(tau))
     h5name = filename + ".h5"
     print(h5name)
@@ -552,6 +594,7 @@ if __name__ == "__main__":
         tau=tau,
         popstep=10,
         N=N,
+        nstep=Nstep,
         tproj=tproj,
         l=l,
         eta=eta,
@@ -560,6 +603,7 @@ if __name__ == "__main__":
         gth=gth_bool,
         h5name = h5name,
         arrstep = 20,
+        resume = resume,
     )
     df.to_csv(csvname, index=False)
        
