@@ -17,12 +17,13 @@ import os
 import subprocess
 
 class UpdatedJastrow(jastrowspin.JastrowSpin):
-    def __init__(self,rs,nconfig=512):
+    def __init__(self,rs,nconfig=512,diffusion=False):
         self.rs = rs
         self.nelec = 2
         self.ndim = 3
         self.nconfig = nconfig
         self.L = (4*np.pi/3*self.nelec)**(1/3) * float(self.rs)  # sys. size/length measured in a0; multiply by 2 since 2 = # of electrons 
+        self.diffusion = diffusion
 
         axes = self.L*np.eye(self.ndim)
         #adapted from generate_jastrow
@@ -38,7 +39,7 @@ class UpdatedJastrow(jastrowspin.JastrowSpin):
         super().__init__(cell,a_basis=abasis, b_basis=bbasis)
         self.parameters["bcoeff"][0, [0, 1, 2]] = gpu.cp.array([-0.25, -0.50, -0.25])
         print(self._nelec)
-        self.accumulator = {"energy": EnergyAccumulator(cell)} #energy accumulator, dict object storing energy info
+        self.accumulator = {"energy": EnergyAccumulator(cell,diffusion)} #energy accumulator, dict object storing energy info
     
     def setup(self, initpos):
         filename = 'opt-rs' + str(self.rs) + '.h5'
