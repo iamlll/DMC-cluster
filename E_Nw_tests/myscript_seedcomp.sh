@@ -1,8 +1,8 @@
 #!/bin/bash
 #SBATCH -J comptests
-#SBATCH -n 8
+#SBATCH -n 18
 #SBATCH --mem-per-cpu 7gb
-#SBATCH -t 23:59:58 # max time limit of 2 days
+#SBATCH -t 1-23:59:58 # max time limit of 2 days
 #SBATCH -p genx,gen,ccq # partition from which slurm will select the requested amt of nodes
 
 cd $SLURM_SUBMIT_DIR
@@ -18,10 +18,10 @@ module load pyscf
 module load python
 module list
 
-rs=4 #(4 90)
+rs=90 #(4 90)
 eta=0
 l=5
-nstep=8000 #4000 for rs=90
+nstep=30000 #4000 for rs=90
 Nw=512
 seeds=(6 7 8 9 10)
 
