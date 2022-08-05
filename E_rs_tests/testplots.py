@@ -206,6 +206,7 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         tau = h.get('meta/tau')[0,0]
         Nw = h.get('meta/nconfig')[0,0]
         ph = h.get('meta/ph_bool')[0,0]
+        r_s = h.get('meta/rs')[0,0]
         diff = h.get('meta/diffusion')[0,0]
         ts = steps*tau
         if tequil is None: tequil = Nsteps*tau/3
@@ -243,7 +244,7 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
     ax.axvline(np.sqrt(tequil),color='g',linestyle='--')
     ax.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
     ax.set_ylabel('$|\\vec r_{12}|$')
-    ax.set_title('$N_w=$%d' %Nw)
+    ax.set_title('$r_s=%d,N_w=%d$' %(r_s,Nw))
     plt.tight_layout()
 
     if avg:
@@ -262,10 +263,39 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         ax2.axvline(np.sqrt(tequil),color='g',linestyle='--')
         ax2.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
         ax2.set_ylabel('$<|\\vec r_{12}|>$')
-        ax2.set_title('$N_w=$%d walkers, %d trials' %(Nw,max([dct,ect,jct])))
+        ax2.set_title('$r_s=%d$, $N_w=$%d walkers, %d trials' %(r_s,Nw,max([dct,ect,jct])))
         ax2.legend()
         plt.tight_layout() 
     plt.show()
+
+def PhononMomDensityTimelapse(filenames,k=1):
+    from h5_plotting import Get_h5_steps
+    fig,ax = plt.subplots(1,1,figsize=(7,5))
+    for i,name in enumerate(filenames):
+        df = pd.read_csv(name)
+        h = h5py.File(os.path.splitext(name)[0] + '.h5','r')
+        steps = df['step'].values
+        tau = h.get('meta/tau')[0,0]
+        Nw = h.get('meta/nconfig')[0,0]
+        if 'dists' in df.keys():
+            n_ks = df['n_ks'].values
+            n_err = df['n_err'].values
+            ts = tau*steps
+        
+            print(n_ks.shape)
+            n_ks = np.array([val[k] for val in n_ks])
+            print(n_ks.shape)
+            ax.plot(ts,n_ks) 
+        else:
+            _,_,_,n_ks,_=Get_h5_steps('',f=h)    
+            savestep = h.get('meta/savestep')[0,0]
+            arrstep = h.get('meta/arrstep')[0,0] 
+            ts = tau*steps[0::int(arrstep/savestep)]
+            ax.plot(ts,n_ks[:,k])
+    ax.set_xlabel('t')
+    ax.set_ylabel('$n_k$')
+    plt.tight_layout()
+    plt.show() 
 
 if __name__=="__main__":
     filenames = sys.argv[1:]

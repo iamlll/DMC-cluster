@@ -14,6 +14,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from qharv.reel import config_h5
 from updatedjastrow import UpdatedJastrow, GetEnergy
+import h5py
 
 #define various constants
 elec = 1.602E-19*2997924580 #convert C to statC
@@ -207,7 +208,7 @@ def InitPos(wf,opt='rand',d=None):
     return pos
 
 from itertools import product
-def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=None,N=5, L=10,elec=True,phonon=True,l=l,eta=eta_STO,gth=True,h5name="dmc.h5",resume=0):
+def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=None,N=5, L=10,elec=True,phonon=True,l=l,eta=eta_STO,gth=True,h5name="dmc.h5",resumeh5=''):
     """
   Inputs:
   L: box length (units of a0)
@@ -226,9 +227,27 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
   """
     from time import time
     # use HDF file for large data output
+    if len(resumefile) > 0: resume = True
+    else: resume = False
+    print(resume)
     if resume:
-        df = pd.read_csv(os.path.splitext(h5name)[0] + '.csv')
-        h5file = config_h5.open_append(h5name)
+        origdf = pd.read_csv(os.path.splitext(resumefile)[0] + '.csv')
+       
+        tick = time()
+        df = origdf.to_dict('list')
+        tock = time()
+        #print(df)
+        print('df copying time: %.2f s' %(tock-tick))
+        origfile = config_h5.open_read(resumefile,'r')
+        tick = time()
+        origfile.copy_file(h5name,overwrite=True)
+        origfile.close()
+        tock = time()
+        print('h5 copying time: %.2f s' %(tock-tick))
+         
+        #h5file = config_h5.open_read(h5name,'w')
+        h5file = config_h5.open_read(h5name,'a')
+        f = h5py.File(resumefile,'r')
     else:
         df = {
             "step": [],
@@ -239,8 +258,6 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
             "eref": [],
             "dists": [],
             "d_err": [], #walker error
-            "n_ks": [],
-            "n_err": [], #walker error
         }
         h5file = config_h5.open_write(h5name)
 
@@ -252,22 +269,27 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
     nconfig = pos.shape[0]
 
     if resume:
-        nstep_old = h5file.get('meta/Nsteps')[0,0]
-        nstep = nstep + nstep_old
-        if 'pos' in list(h5file.keys()):
-            pos = np.array(h5file.get('pos'))
+        nstep_old = int(f.get('meta/Nsteps')[0,0])
+        print('nstep_old',nstep_old,type(nstep_old))
+        print('arrstep',arrstep,type(arrstep))
+        if 'pos' in list(f.keys()):
+            pos = np.array(f.get('pos'))
         else:
-            pos = np.array(h5file.get('%d/f_ks' %nstep_old-arrstep))
+            pos = np.array(f.get('step%d/pos' %(nstep_old-arrstep,)))
+        print(pos.shape)
     else:
         nstep_old = 0
 
     print(nstep)
-    meta = {'tau': tau, 'l': l, 'eta': eta, 'rs': wf.rs, 'L': L, 'N_cut': N, 'g': g, 'alpha': alpha, 'nconfig': nconfig, 'savestep':savestep, 'popstep':popstep, 'arrstep': arrstep,'elec_bool': elec,'ph_bool': phonon, 'gth_bool': gth, 'tproj': tproj, 'Nsteps': nstep, 'diffusion':int(wf.diffusion) }  # add more as needed
-    # turn each value into an array
-    for key, val in meta.items():
-        meta[key] = [val]
-    metagrp = h5file.create_group(h5file.root,'meta')
-    config_h5.save_dict(meta, h5file, metagrp)
+    if resume:
+        h5file.root.meta.Nsteps = nstep
+    else:
+        meta = {'tau': tau, 'l': l, 'eta': eta, 'rs': wf.rs, 'L': L, 'N_cut': N, 'g': g, 'alpha': alpha, 'nconfig': nconfig, 'savestep':savestep, 'popstep':popstep, 'arrstep': arrstep,'elec_bool': elec,'ph_bool': phonon, 'gth_bool': gth, 'tproj': tproj, 'Nsteps': nstep, 'diffusion':int(wf.diffusion) }  # add more as needed
+        # turn each value into an array
+        for key, val in meta.items():
+            meta[key] = [val]
+        metagrp = h5file.create_group(h5file.root,'meta')
+        config_h5.save_dict(meta, h5file, metagrp)
 
     weight = np.ones(nconfig)
     #setup wave function
@@ -277,10 +299,10 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         return
 
     if resume:
-        ks = np.array(h5file.get('ks'))
-        kmag = np.array(h5file.get('kmag'))
-        f_ks = np.array(h5file.get('%d/f_ks' %nstep_old-arrstep))
-        h_ks = np.array(h5file.get('h_ks' %nstep_old-arrstep))
+        ks = np.array(f.get('ks'))
+        kmag = np.array(f.get('kmags'))
+        f_ks = np.array(f.get('step%d/f_ks' %(nstep_old-arrstep,)))
+        h_ks = np.array(f.get('h_ks'))
     else:
         #Make a supercell/box
         #k = (nx, ny, nz)*2*pi/L for nx^2+ny^2+nz^2 <= n_c^2 for cutoff value n_c = N, where n_c -> inf is the continuum limit. 
@@ -310,13 +332,23 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
     eref = np.mean(elocold)
     print(eref)
 
-    timers = dict(
-      drift_diffusion = 0.0,
-      mixed_estimator = 0.0,
-      gth_estimator = 0.0,
-      update_coherent = 0.0,
-      branch = 0.0,
-    )
+    if resume:
+        timers = dict(
+          drift_diffusion = h5file.root.meta.drift_diffusion,
+          mixed_estimator = h5file.root.meta.mixed_estimator,
+          gth_estimator = h5file.root.meta.gth_estimator,
+          update_coherent = h5file.root.meta.update_coherent,
+          branch = h5file.root.meta.branch,
+        )
+    else:
+        timers = dict(
+          drift_diffusion = 0.0,
+          mixed_estimator = 0.0,
+          gth_estimator = 0.0,
+          update_coherent = 0.0,
+          branch = 0.0,
+        )
+
     for istep in range(nstep_old,nstep):
         tick = time()
         if elec == True:
@@ -373,8 +405,8 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         Delta = -1./tau* np.log(wavg/oldwt) #need to normalize <w_{n+1}>/<w_n>
         eref = eref + Delta
 
-        '''
-        if istep % popstep == 0 or istep == nstep-1:
+        ''' 
+        if istep % savestep == 0 or istep == nstep-1:
             print(
                 "iteration",
                 istep,
@@ -394,9 +426,7 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
             dists = np.sqrt(np.sum((pos[:,0,:]-pos[:,1,:])**2,axis=1))
             avgdists = np.mean(dists) #average over walkers
             d_err = np.std(dists)/nconfig
-            n_ks = f_ks* np.conj(h_ks) #n_k = hw a*a; momentum distribution of equilibrium phonons -- want to plot this as a function of |k|
-            nkavg = n_ks.mean(axis=1)
-            n_err = np.std(n_ks,axis=1)/nconfig
+            
             df["step"].append(istep)
             df["ke_coul"].append(np.mean(ke_coul))
             df["elocal"].append(np.mean(eloc))
@@ -405,20 +435,32 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
             df["eref"].append(eref)
             df['dists'].append(avgdists)
             df['d_err'].append(d_err)
-            df['n_ks'].append(nkavg)
-            df['n_err'].append(n_err)
         
         if istep % arrstep == 0:
             grp = h5file.create_group(h5file.root, 'step%d' % istep)
+            n_ks = f_ks* np.conj(h_ks) #n_k = hw a*a; momentum distribution of equilibrium phonons -- want to plot this as a function of |k|
+            nkavg = n_ks.mean(axis=1)
+            n_err = np.std(n_ks,axis=1)/nconfig
             big_data = {
                 'f_ks': f_ks,
                 'pos':pos,
+                'n_ks': nkavg,
+                'n_err': n_err
             }
             config_h5.save_dict(big_data, h5file, slab=grp)
-    saver = {'kmags': kmag, 'ks':ks, 'h_ks': h_ks}
-    config_h5.save_dict(saver, h5file)
-    #save timings in h5 file also
-    config_h5.save_dict(timers, h5file, metagrp)
+ 
+    if resume:
+          h5file.root.meta.drift_diffusion = timers['drift_diffusion']
+          h5file.root.meta.mixed_estimator = timers['mixed_estimator']
+          h5file.root.meta.gth_estimator = timers['gth_estimator']
+          h5file.root.meta.update_coherent = timers['update_coherent']
+          h5file.root.meta.branch = timers['branch']
+    else:
+        saver = {'kmags': kmag, 'ks':ks, 'h_ks': h_ks}
+        config_h5.save_dict(saver, h5file)
+ 
+        #save timings in h5 file also
+        config_h5.save_dict(timers, h5file, metagrp)
    
     h5file.close()
     print('Timings:')
@@ -526,6 +568,7 @@ if __name__ == "__main__":
     from updatedjastrow import UpdatedJastrow
     import time
     from argparse import ArgumentParser
+    import re
     parser = ArgumentParser()
     parser.add_argument('--rs', type=int, default=4)
     parser.add_argument('--nconf', type=int, default=512)
@@ -545,54 +588,66 @@ if __name__ == "__main__":
     parser.add_argument('--init',type=str,default='bind') 
     parser.add_argument('--tau',type=np.float64)
     parser.add_argument('--diffusion',type=int,default=0) # on/off switch for diffusion (jellium, no Coulomb)
-    parser.add_argument('--resume',type=int,default=0) # whether to resume the simulation from a previous file  
+    parser.add_argument('--resume',type=int,default=0) # whether to resume the simulation from a previous file (if so, give the name of the .h5 file to resume from) 
 
     args = parser.parse_args()
-
+    # if resume is True, find the name of the file I want to resume from based on the other input arguments
     r_s = args.rs  # inter-electron spacing, controls density
     tau = args.tau
     print(tau)
     if tau is None: tau = r_s/40 
-
+    Nstep=args.Nstep
+    popstep = args.popstep
+    arrstep = args.arrstep
+    savestep = args.savestep
     nconfig = args.nconf #default is 5000
     seed = args.seed
     elec_bool = args.elec > 0
     gth_bool = args.gth > 0
     diffusion = args.diffusion > 0
-    resume = args.resume > 0
-    popstep = args.popstep
-    arrstep = args.arrstep
-    savestep = args.savestep
+    if Nstep is None:
+        tproj = args.tproj #projection time = tau * nsteps
+        Nstep = int(tproj/tau)
+    else:
+    # if num of sim steps is specified, this determines the sim projection time
+        tproj = Nstep*tau
+
     if diffusion:
         ph_bool = 0
     else:
         ph_bool = args.ph > 0
-    print('diffusion',diffusion)
-
     N = args.Ncut
-    tproj = args.tproj #projection time = tau * nsteps
     init = args.init
-    Nstep=args.Nstep
-    '''    
-    if Nstep is None:
-        Nstep = int(tproj/tau)
-    else:
-        # if num of sim steps is specified, this determines the sim projection time
-        tproj = Nstep*tau
-    '''
+    l = args.l
+    eta = args.eta
+    datadir = args.outdir
+    print('diffusion',diffusion)
+    print('Nstep',Nstep)
+
     wf = UpdatedJastrow(r_s,nconfig=nconfig,diffusion=diffusion)
     print(wf.L)
 
     # Modify the Frohlich coupling constant alpha = (1-eta)*\tilde l
-    l = args.l
     print('l',l)
-    eta = args.eta
-    datadir = args.outdir
     print(datadir)
     if os.path.isdir(datadir) == 0:
         print('Making data directory...')
         os.mkdir(datadir) 
+
+    # if want to resume from a previous file, find said file first. If file not found, start sim from scratch
+    resume = args.resume > 0
+    if resume:
+        filename = 'DMC_%s_diffusion_%d_el%d_ph%d_rs_%d_popsize_%d_seed_%d_N_%d_eta_%.2f_l_%.2f_nstep_[0-9]*_popstep%d_tau_%s.h5' %(init,int(diffusion),int(elec_bool), int(ph_bool), r_s,nconfig, seed, N, eta, l,popstep,str(tau))
+        results = [x for x in os.listdir(datadir) if re.match(filename,x) and os.path.exists(os.path.join(datadir,os.path.splitext(x)[0]+'.csv'))]
  
+        nsteps = [h5py.File(os.path.join(datadir,name),'r').get('meta/Nsteps')[0,0] for name in results] 
+        
+        idx = np.argwhere(nsteps == max(nsteps))[0][0]
+        resumefile = os.path.join(datadir,results[idx])
+        Nstep = Nstep + nsteps[idx] #update total number of steps in sim
+        print(resumefile)
+        print(Nstep)
+    else: resumefile = ''
     filename = "DMC_{9}_diffusion_{10}_el{8}_ph{7}_rs_{0}_popsize_{1}_seed_{2}_N_{3}_eta_{4:.2f}_l_{5:.2f}_nstep_{6}_popstep{11}".format(r_s, nconfig, seed, N,eta,l,Nstep,int(ph_bool),int(elec_bool),init,int(diffusion),popstep)
     print(filename)
     print('elec',elec_bool)
@@ -628,7 +683,7 @@ if __name__ == "__main__":
         h5name = h5name,
         arrstep = arrstep,
         savestep = savestep,
-        resume = resume,
+        resumeh5 = resumefile,
     )
     df.to_csv(csvname, index=False)
        
