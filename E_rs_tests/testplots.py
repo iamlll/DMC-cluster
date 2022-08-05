@@ -203,6 +203,7 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
             d_err = df['d_err'].values
         else:
             _,_,_,_,dists=Get_h5_steps('',f=h)    
+        print(h.get('meta/drift_diffusion')[0])
         tau = h.get('meta/tau')[0,0]
         Nw = h.get('meta/nconfig')[0,0]
         ph = h.get('meta/ph_bool')[0,0]
@@ -246,13 +247,18 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
     ax.set_ylabel('$|\\vec r_{12}|$')
     ax.set_title('$r_s=%d,N_w=%d$' %(r_s,Nw))
     plt.tight_layout()
-
+    
     if avg:
+        print(dct,jct,ect)
         fig2,ax2 = plt.subplots(1,1,figsize=(5,7))
-        diff_avg = diff_avg/dct
-        diff_err_avg = np.sqrt(diff_err_avg)/dct
-        eph_avg = eph_avg/ect
-        jell_avg = jell_avg/jct
+        if dct > 0:
+            diff_avg = diff_avg/dct
+            diff_err_avg = np.sqrt(diff_err_avg)/dct
+        if ect > 0:
+            eph_avg = eph_avg/ect
+        if jct > 0:
+            jell_avg = jell_avg/jct
+
         ax2.plot(np.sqrt(ts),diff_avg,color='magenta',label='diff (avg)')
         ax2.plot(np.sqrt(ts),jell_avg,color='blue',label='jell (avg)')
         ax2.plot(np.sqrt(ts),eph_avg,color='green',label='eph (avg)')

@@ -319,12 +319,10 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         f_ks = init_f_k(ks, kmag, g, nconfig)
         if phonon == False: f_ks.fill(0.)
         h_ks = f_ks #this describes our trial wave fxn coherent state amplitudes
-        #print(h_ks)
         #egth,_ = gth_estimator(pos, wf, configs, g, tau,h_ks, f_ks, ks, kcopy,phonon)
     
     kcopy = np.array([[ kmag[i] for j in range(nconfig)] for i in range(len(kmag))]) # (# ks) x nconfig matrix
 
-    #print(np.mean(eloc))
     rho, _ = update_f_ks(pos, wf, g, tau, h_ks, f_ks, ks, kcopy,phonon)
     ke_coul = GetEnergy(wf,configs,pos,'total')
     elocold = mixed_estimator(ke_coul, pos, wf, configs, rho, g, h_ks, f_ks, kcopy,phonon)
@@ -334,11 +332,11 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
 
     if resume:
         timers = dict(
-          drift_diffusion = h5file.root.meta.drift_diffusion,
-          mixed_estimator = h5file.root.meta.mixed_estimator,
-          gth_estimator = h5file.root.meta.gth_estimator,
-          update_coherent = h5file.root.meta.update_coherent,
-          branch = h5file.root.meta.branch,
+          drift_diffusion = float(f.get('meta/drift_diffusion')[0]),
+          mixed_estimator = float(f.get('meta/mixed_estimator')[0]),
+          gth_estimator = float(f.get('meta/gth_estimator')[0]),
+          update_coherent = float(f.get('meta/update_coherent')[0]),
+          branch = float(f.get('meta/branch')[0]),
         )
     else:
         timers = dict(
