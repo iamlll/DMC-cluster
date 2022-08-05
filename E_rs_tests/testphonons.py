@@ -227,18 +227,18 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
   """
     from time import time
     # use HDF file for large data output
-    if len(resumefile) > 0: resume = True
+    if len(resumeh5) > 0: resume = True
     else: resume = False
     print(resume)
     if resume:
-        origdf = pd.read_csv(os.path.splitext(resumefile)[0] + '.csv')
+        origdf = pd.read_csv(os.path.splitext(resumeh5)[0] + '.csv')
        
         tick = time()
         df = origdf.to_dict('list')
         tock = time()
         #print(df)
         print('df copying time: %.2f s' %(tock-tick))
-        origfile = config_h5.open_read(resumefile,'r')
+        origfile = config_h5.open_read(resumeh5,'r')
         tick = time()
         origfile.copy_file(h5name,overwrite=True)
         origfile.close()
@@ -247,7 +247,7 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
          
         #h5file = config_h5.open_read(h5name,'w')
         h5file = config_h5.open_read(h5name,'a')
-        f = h5py.File(resumefile,'r')
+        f = h5py.File(resumeh5,'r')
     else:
         df = {
             "step": [],
