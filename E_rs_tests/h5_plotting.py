@@ -69,6 +69,9 @@ def Get_h5_steps(filename,f=None,tequil=None):
         # now want to sort through these in order, loop through them and extract each set of f_k and n_k (also distances r), then concatenate them to make a giant array
         f_ks = np.array(f.get(test_str + '/f_ks'))
         n_ks = np.array(f.get(test_str+'/n_ks'))
+       
+
+ 
         # if f_ks is 2D (Nkpts x Nwalkers), average over all walkers at each k-point and find the SD
         if len(f_ks.shape) > 1:
             f_ks = f_ks.mean(axis=1)
@@ -186,4 +189,5 @@ if __name__ == '__main__':
   #Get_h5_steps(f)
   #Phonon_Mom_Density_h5(f)
  
-  Elec_sep_dist(filenames,fit=True,tequil=500)
+  Get_h5_steps(filenames[0],f=None,tequil=None)
+  #Elec_sep_dist(filenames,fit=True,tequil=500)

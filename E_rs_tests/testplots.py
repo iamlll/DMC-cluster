@@ -206,6 +206,8 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         print(h.get('meta/drift_diffusion')[0])
         tau = h.get('meta/tau')[0,0]
         Nw = h.get('meta/nconfig')[0,0]
+        Nsteps = h.get('meta/Nsteps')[0,0]
+        print('nsteps',Nsteps)
         ph = h.get('meta/ph_bool')[0,0]
         r_s = h.get('meta/rs')[0,0]
         diff = h.get('meta/diffusion')[0,0]
@@ -282,8 +284,9 @@ def PhononMomDensityTimelapse(filenames,k=1):
         h = h5py.File(os.path.splitext(name)[0] + '.h5','r')
         steps = df['step'].values
         tau = h.get('meta/tau')[0,0]
+        r_s = h.get('meta/rs')[0,0]
         Nw = h.get('meta/nconfig')[0,0]
-        if 'dists' in df.keys():
+        if 'n_ks' in df.keys():
             n_ks = df['n_ks'].values
             n_err = df['n_err'].values
             ts = tau*steps
@@ -297,9 +300,14 @@ def PhononMomDensityTimelapse(filenames,k=1):
             savestep = h.get('meta/savestep')[0,0]
             arrstep = h.get('meta/arrstep')[0,0] 
             ts = tau*steps[0::int(arrstep/savestep)]
-            ax.plot(ts,n_ks[:,k])
+            sstep = steps[0::int(arrstep/savestep)]
+            print(sstep[:5])
+            ax.plot(ts,n_ks.real[:,k],'b',label='real')
+            ax.plot(ts,n_ks.imag[:,k],'r--',label='imag')
     ax.set_xlabel('t')
     ax.set_ylabel('$n_k$')
+    ax.legend()
+    ax.set_title('$r_s=%d$, Nconfig=%d, Nsteps=%d' %(r_s,Nw,max(steps)))
     plt.tight_layout()
     plt.show() 
 
@@ -315,3 +323,4 @@ if __name__=="__main__":
     #E_vs_var(filenames,xvar='1/nconfig',comp=True)
     Elec_sep_dist(filenames,fit=True,tequil=tequil,avg=True)
     #JelliumComp()
+    #PhononMomDensityTimelapse(filenames,k=1)

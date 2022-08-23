@@ -245,7 +245,6 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         tock = time()
         print('h5 copying time: %.2f s' %(tock-tick))
          
-        #h5file = config_h5.open_read(h5name,'w')
         h5file = config_h5.open_read(h5name,'a')
         f = h5py.File(resumeh5,'r')
     else:
@@ -275,14 +274,23 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         if 'pos' in list(f.keys()):
             pos = np.array(f.get('pos'))
         else:
-            pos = np.array(f.get('step%d/pos' %(nstep_old-arrstep,)))
-        print(pos.shape)
+            pos = np.array(f.get('step%d/pos' %(arrstep*np.floor(nstep_old/arrstep),)))
+        '''
+        if pos == None: 
+            nstep = nstep - nstep_old
+            nstep_old = 0
+            resume = False
+            h5file.close()
+            h5file = config_h5.open_read(h5name,'w')
+        '''
     else:
         nstep_old = 0
 
     print(nstep)
     if resume:
-        h5file.root.meta.Nsteps = nstep
+        print(type(h5file.root.meta.Nsteps),h5file.root.meta.Nsteps[0]) 
+        h5file.root.meta.Nsteps[0] = nstep
+        print(type(h5file.root.meta.Nsteps),h5file.root.meta.Nsteps[0]) 
     else:
         meta = {'tau': tau, 'l': l, 'eta': eta, 'rs': wf.rs, 'L': L, 'N_cut': N, 'g': g, 'alpha': alpha, 'nconfig': nconfig, 'savestep':savestep, 'popstep':popstep, 'arrstep': arrstep,'elec_bool': elec,'ph_bool': phonon, 'gth_bool': gth, 'tproj': tproj, 'Nsteps': nstep, 'diffusion':int(wf.diffusion) }  # add more as needed
         # turn each value into an array
@@ -301,7 +309,7 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
     if resume:
         ks = np.array(f.get('ks'))
         kmag = np.array(f.get('kmags'))
-        f_ks = np.array(f.get('step%d/f_ks' %(nstep_old-arrstep,)))
+        f_ks = np.array(f.get('step%d/f_ks' %(arrstep*np.floor(nstep_old/arrstep),)))
         h_ks = np.array(f.get('h_ks'))
     else:
         #Make a supercell/box
@@ -347,7 +355,9 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
           branch = 0.0,
         )
 
-    for istep in range(nstep_old,nstep):
+    print('nstep_old',nstep_old)
+    print('nstep',nstep)
+    for istep in range(nstep_old+1,nstep+1):
         tick = time()
         if elec == True:
             driftold = tau * wf.grad(pos)
@@ -448,11 +458,11 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
             config_h5.save_dict(big_data, h5file, slab=grp)
  
     if resume:
-          h5file.root.meta.drift_diffusion = timers['drift_diffusion']
-          h5file.root.meta.mixed_estimator = timers['mixed_estimator']
-          h5file.root.meta.gth_estimator = timers['gth_estimator']
-          h5file.root.meta.update_coherent = timers['update_coherent']
-          h5file.root.meta.branch = timers['branch']
+          h5file.root.meta.drift_diffusion[0] = timers['drift_diffusion']
+          h5file.root.meta.mixed_estimator[0] = timers['mixed_estimator']
+          h5file.root.meta.gth_estimator[0] = timers['gth_estimator']
+          h5file.root.meta.update_coherent[0] = timers['update_coherent']
+          h5file.root.meta.branch[0] = timers['branch']
     else:
         saver = {'kmags': kmag, 'ks':ks, 'h_ks': h_ks}
         config_h5.save_dict(saver, h5file)
@@ -608,6 +618,9 @@ if __name__ == "__main__":
         Nstep = int(tproj/tau)
     else:
     # if num of sim steps is specified, this determines the sim projection time
+        if Nstep % arrstep != 0:
+            Nstep = int(arrstep*np.ceil(Nstep/arrstep))
+            print('big arrays (position, phonon amplitudes) are only saved every %d steps, rounding to nearest save point: Nstep = %d' %(arrstep, Nstep))
         tproj = Nstep*tau
 
     if diffusion:
@@ -637,14 +650,22 @@ if __name__ == "__main__":
     if resume:
         filename = 'DMC_%s_diffusion_%d_el%d_ph%d_rs_%d_popsize_%d_seed_%d_N_%d_eta_%.2f_l_%.2f_nstep_[0-9]*_popstep%d_tau_%s.h5' %(init,int(diffusion),int(elec_bool), int(ph_bool), r_s,nconfig, seed, N, eta, l,popstep,str(tau))
         results = [x for x in os.listdir(datadir) if re.match(filename,x) and os.path.exists(os.path.join(datadir,os.path.splitext(x)[0]+'.csv'))]
- 
-        nsteps = [h5py.File(os.path.join(datadir,name),'r').get('meta/Nsteps')[0,0] for name in results] 
-        
-        idx = np.argwhere(nsteps == max(nsteps))[0][0]
-        resumefile = os.path.join(datadir,results[idx])
-        Nstep = Nstep + nsteps[idx] #update total number of steps in sim
-        print(resumefile)
-        print(Nstep)
+        print(results)
+        if len(results) == 0:
+            resumefile = ''
+        else:
+            nsteps = [h5py.File(os.path.join(datadir,name),'r').get('meta/Nsteps')[0,0] for name in results] 
+            print(nsteps)    
+            idx = np.argwhere(nsteps == max(nsteps))[0][0]
+            resumefile = os.path.join(datadir,results[idx])
+            f = h5py.File(resumefile,'r')
+            pos = np.array(f.get('step%d/pos' %(arrstep*np.floor(nsteps[idx]/arrstep),)))
+            if pos is None: 
+                resumefile = ''
+            else:
+                Nstep = Nstep + nsteps[idx]
+            print(resumefile)
+            print(Nstep)
     else: resumefile = ''
     filename = "DMC_{9}_diffusion_{10}_el{8}_ph{7}_rs_{0}_popsize_{1}_seed_{2}_N_{3}_eta_{4:.2f}_l_{5:.2f}_nstep_{6}_popstep{11}".format(r_s, nconfig, seed, N,eta,l,Nstep,int(ph_bool),int(elec_bool),init,int(diffusion),popstep)
     print(filename)
