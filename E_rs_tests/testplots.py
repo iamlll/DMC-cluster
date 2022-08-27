@@ -5,6 +5,29 @@ import sys
 from scipy.optimize import curve_fit
 import os
 import h5py
+import re
+
+def FindMostRecentFile(datadir):
+    ''' find files corresponding to each seed with the max number of sim steps'''
+    filename = r"DMC_.*?seed_([0-9]).*?nstep_([0-9]+).*?\.csv"
+    results = [re.match(filename,x) for x in os.listdir(datadir) if re.match(filename,x) and os.path.exists(os.path.join(datadir,os.path.splitext(x)[0]+'.h5'))]
+    if len(results) == 0:
+        print('Hmm, no completed sims found. Mission abort...')
+        return
+    else:
+        names= np.array([str(x.string) for x in results])
+        nsteps = np.array([int(x.group(2)) for x in results])
+        seed = np.array([int(x.group(1)) for x in results])
+        namelist = []
+        for s in np.unique(seed):
+            idx = np.where(seed == s)[0]
+            subarr = nsteps[idx]
+            subres = names[idx]
+            nidx = np.where(subarr == max(subarr))[0]
+            for i in nidx:
+                resumefile = os.path.join('.',datadir,subres[i])
+                namelist.append(resumefile)
+    return namelist 
 
 def E_vs_var(filenames,xvar='r_s',labels=[],comp=True):
     ''' Use reblocked csv file (dmc_reblock.py). Plot E vs r_s (sys density) for fixed eta, U (l), etc.
@@ -182,6 +205,8 @@ def E_timelapse(filenames,gth=False,tequil=None,labels=[]):
   
 def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
     from h5_plotting import Get_h5_steps
+    # given a folder name, pick out all the different files / seeds corresponding to the largest number of simulation steps
+     
     if len(labels)==0:
         labels = np.full(len(filenames),'',dtype=str)
     fig,ax = plt.subplots(1,1,figsize=(5,7))
@@ -193,17 +218,19 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         eph_avg = np.zeros(diff_avg.shape)
         jell_avg = np.zeros(diff_avg.shape)
         dct = 0; ect = 0; jct = 0;
-
+        tavg = np.zeros(diff_avg.shape)
+    
     for i,name in enumerate(filenames):
         df = pd.read_csv(name)
         h = h5py.File(os.path.splitext(name)[0] + '.h5','r')
         steps = df['step'].values
         if 'dists' in df.keys():
+            print('found!')
             dists = df['dists'].values
             d_err = df['d_err'].values
         else:
+            print('h5 found')
             _,_,_,_,dists=Get_h5_steps('',f=h)    
-        print(h.get('meta/drift_diffusion')[0])
         tau = h.get('meta/tau')[0,0]
         Nw = h.get('meta/nconfig')[0,0]
         Nsteps = h.get('meta/Nsteps')[0,0]
@@ -212,17 +239,25 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         r_s = h.get('meta/rs')[0,0]
         diff = h.get('meta/diffusion')[0,0]
         ts = steps*tau
+        if i==0: tavg = ts
         if tequil is None: tequil = Nsteps*tau/3
-        print(tequil)
+        #print(tequil)
         nequil = int(tequil/tau)
-        print(tau)
-
+        #print(tau)
         if diff == 1:
             labels[i] = 'diffusion'
             color='magenta'
             if avg:
-                diff_avg = diff_avg + dists
-                diff_err_avg = diff_err_avg + d_err**2
+                if len(diff_avg) > len(dists):
+                    diff_avg[:len(dists)] = diff_avg[:len(dists)] + dists
+                    diff_err_avg[:len(dists)] = diff_err_avg[:len(dists)] + d_err**2
+                elif len(diff_avg) == len(dists):
+                    diff_avg = diff_avg + dists
+                    diff_err_avg = diff_err_avg + d_err**2
+                else:
+                    diff_avg = diff_avg + dists[:len(diff_avg)]
+                    diff_err_avg = diff_err_avg + d_err[:len(diff_avg)]**2
+                
                 dct = dct + 1
             if fit==True and avg==False:
                 linfit,txt = FitData(np.sqrt(ts),dists,yerr=d_err,guess=[5,5],varlabs=['r','\sqrt{t}'])
@@ -232,13 +267,23 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         elif diff == 0 and ph == 0: 
             labels[i] = 'jellium'
             if avg:
-                jell_avg = jell_avg + dists
+                if len(jell_avg) > len(dists):
+                    jell_avg[:len(dists)] = jell_avg[:len(dists)] + dists
+                elif len(jell_avg) == len(dists):
+                    jell_avg = jell_avg + dists
+                else:
+                    jell_avg = jell_avg + dists[:len(jell_avg)]
                 jct = jct + 1
             color='blue'
         else:
             labels[i]= 'elec+ph'
             if avg:
-                eph_avg = eph_avg + dists
+                if len(eph_avg) > len(dists):
+                    eph_avg[:len(dists)] = eph_avg[:len(dists)] + dists
+                elif len(eph_avg) == len(dists):
+                    eph_avg = eph_avg + dists
+                else:
+                    eph_avg = eph_avg + dists[:len(eph_avg)]
                 ect = ect + 1
             color = 'green'
         ax.plot(np.sqrt(ts),dists,label=labels[i],color=color)
@@ -261,12 +306,12 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         if jct > 0:
             jell_avg = jell_avg/jct
 
-        ax2.plot(np.sqrt(ts),diff_avg,color='magenta',label='diff (avg)')
-        ax2.plot(np.sqrt(ts),jell_avg,color='blue',label='jell (avg)')
-        ax2.plot(np.sqrt(ts),eph_avg,color='green',label='eph (avg)')
+        ax2.plot(np.sqrt(tavg),diff_avg,color='magenta',label='diff (avg)')
+        ax2.plot(np.sqrt(tavg),jell_avg,color='blue',label='jell (avg)')
+        ax2.plot(np.sqrt(tavg),eph_avg,color='green',label='eph (avg)')
         if fit:
-            linfit,txt = FitData(np.sqrt(ts),diff_avg,yerr=diff_err_avg,guess=[5,5],varlabs=['r','\sqrt{t}'])
-            ax2.plot(np.sqrt(ts),linfit,'r-',zorder=10,label='diff fit')
+            linfit,txt = FitData(np.sqrt(tavg),diff_avg,yerr=diff_err_avg,guess=[5,5],varlabs=['r','\sqrt{t}'])
+            ax2.plot(np.sqrt(tavg),linfit,'r-',zorder=10,label='diff fit')
             ax2.text(0.3,0.75, txt, horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes)
         ax2.axvline(np.sqrt(tequil),color='g',linestyle='--')
         ax2.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
@@ -312,8 +357,8 @@ def PhononMomDensityTimelapse(filenames,k=1):
     plt.show() 
 
 if __name__=="__main__":
-    filenames = sys.argv[1:]
-    print(filenames)
+    datadir = sys.argv[1]
+    filenames = FindMostRecentFile(datadir)
     #labels=['$t_{proj}=64,N_w=32$','$t_{proj}=128,N_w=32$']
     #labels=['$N=5$','N=10','N=15','N=20']
     #labels=['popstep=10,$\\tau=.75$','popstep=10,$\\tau=5$','popstep=10,$\\tau=2$','popstep=20,$\\tau=.75$','popstep=2,$\\tau=.75$']
@@ -324,3 +369,4 @@ if __name__=="__main__":
     Elec_sep_dist(filenames,fit=True,tequil=tequil,avg=True)
     #JelliumComp()
     #PhononMomDensityTimelapse(filenames,k=1)
+    
