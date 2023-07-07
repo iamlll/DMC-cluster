@@ -12,20 +12,32 @@ import scipy.io as sio
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import sys
 from pathlib import Path
+import glob
+from numpy import matlib as mb
+import numpy.ma as ma
 
-def extract_walkers(fp, nevery=1000):
+axfont=16
+legfont=14
+titlefont=16
+def extract_walkers(fp, nevery=1000, nequil=2000):
   posl = []
+  weights = []
   for key in fp.keys():
     if key.startswith('step'):
       istep = int(key[4:])
+      if istep <= nequil: continue #ignore t=0 because system hasn't equilibrated at that time
       if (istep % nevery) == 0:
         pos1 = fp[key]['pos'][()]
         posl.append(pos1)
-  return np.array(posl)
+        wt = fp[key]['weight'][()]
+        weights.append(wt)
+  return np.array(posl),np.array(weights)
 
 def calculate_displacements(posa, lbox):
   '''Calculate separation distance r12 = r1-r2, and subtract off multiples of box length to find resulting displacements within a single cell
   posa: Nw x Nelec x Nt array
+  
+  returns: Nw x Nt array
   '''
   frames = []
   for iconf, walkers in enumerate(posa):
@@ -55,18 +67,23 @@ def box_gofr(disps, lbox, nelec, nbin=64):
   myx = (bin_edges[1:]+bin_edges[:-1])/2
   return myx, grm, gre
 
-def box_gr3d(disps, lbox, nbin=16):
+def box_gr3d(disps, wts, lbox, nbin=16):
   mesh = (nbin,)*3
   counts = np.zeros(mesh, dtype=float)
+  weightmat = np.zeros(mesh,dtype=float) #walker weights with which to normalize g(r)
   xmin = -lbox/2; xmax = lbox/2; dx = (xmax-xmin)/nbin
   #bin_edges = np.linspace(xmin, xmax, nbin+1)
   ix = ((disps[:, 0]-xmin)//dx).astype(int) #double slash (//) = floor division operator, takes only the integer part of the division operation (basically which bin each electron position falls into)
   iy = ((disps[:, 1]-xmin)//dx).astype(int)
   iz = ((disps[:, 2]-xmin)//dx).astype(int)
+  print(ix.shape)
+  ct = 0
   for i, j, k in zip(ix, iy, iz):
     counts[i, j, k] += 1
+    weightmat[i,j,k] = wts[ct] 
+    ct += 1   
   # normalize by (# bins)/(total # events) = V/N!
-  gofr = counts* np.prod(mesh)/counts.sum()
+  gofr = counts* weightmat * np.prod(mesh)/counts.sum()
   return gofr, counts
 
 def box_sofk(posa, lbox, kcut):
@@ -102,9 +119,8 @@ def yl_ysql(yl, ysql=None):
   ye = np.sqrt((y2m-ym**2)/(len(yl)-1))
   return ym, ye
 
-def Calc_3D_gofr(fh5,nx=16,nevery=1000,seed=0):
+def Calc_3D_gofr(fh5,nx=16,nevery=1000,seed=0,nequil=2000,save=True):
   '''Calculate 3D pair correlation function g(r)'''
-
   fp = h5py.File(fh5, 'r')
   rs = fp.get('meta/rs')[0,0]
   Nw = fp.get('meta/nconfig')[0,0]
@@ -113,8 +129,10 @@ def Calc_3D_gofr(fh5,nx=16,nevery=1000,seed=0):
   el = fp.get('meta/elec_bool')[0,0]
   print(type(el),ph,seed)
 
-  dt, posa = sugar.time(extract_walkers)(fp, nevery)
+  dt, data = sugar.time(extract_walkers)(fp, nevery,nequil)
+  posa, wts = data
   fp.close()
+  print(posa.shape)
   nconf, nwalker, nelec, ndim = posa.shape
   msg = 'extracted %d frames in %.4f s' % (nconf, dt)
   print(msg)
@@ -126,14 +144,16 @@ def Calc_3D_gofr(fh5,nx=16,nevery=1000,seed=0):
 
   # symmetrize displacement
   xyz = np.r_[disps, -disps].reshape(-1, 3)
+  symmwts = np.r_[wts,wts].reshape(-1)
   # bin in 3D
-  gofr, counts = box_gr3d(xyz, lbox, nbin=nx)
+  gofr, counts = box_gr3d(xyz, symmwts, lbox, nbin=nx)
 
-  # data: save 3D g(r)
-  data = {'gofr': gofr, 'counts': counts, 'axes': lbox*np.eye(3), 'origin': -lbox/2*np.ones(3), 'nbins': nx, 'L': lbox, 'seed': seed}
-  savename = 'rs%d_seed%d_Nw%d_el%d_ph%d.mat' % (rs,seed, nwalker,el, ph)
-  savename = os.path.join(os.path.dirname(fh5),savename)
-  sio.savemat(savename,data)
+  if save:
+    # data: save 3D g(r)
+    data = {'gofr': gofr, 'counts': counts, 'axes': lbox*np.eye(3), 'origin': -lbox/2*np.ones(3), 'nbins': nx, 'L': lbox, 'seed': seed}
+    savename = 'rs%d_seed%d_Nw%d_el%d_ph%d.mat' % (rs,seed, nwalker,el, ph)
+    savename = os.path.join(os.path.dirname(fh5),savename)
+    sio.savemat(savename,data)
   return gofr, counts
   
 def Plot_3D_gofr(fh5,nx=16,nevery=1000,zlim=[0,5.5],cutoff=2):
@@ -144,22 +164,24 @@ def Plot_3D_gofr(fh5,nx=16,nevery=1000,zlim=[0,5.5],cutoff=2):
 
   nevery: how often to extract trajectory
   '''  
-  try:
-    # to load data
-    fp = h5py.File(fh5, 'r')
-    rs = fp.get('meta/rs')[0,0]
-    Nw = fp.get('meta/nconfig')[0,0]
-    ph = fp.get('meta/ph_bool')[0,0]
-    el = fp.get('meta/elec_bool')[0,0]
-    seedid = np.where(np.array(fh5.split('_')) == 'seed')[0][0]
-    seed = int(fh5.split('_')[seedid+1])
-    savename = 'rs%d_seed%d_Nw%d_el%d_ph%d.mat' % (rs,seed, Nw,el, ph)
-    savename = os.path.join(os.path.dirname(fh5),savename)
+  # to load data
+  fp = h5py.File(fh5, 'r')
+  rs = fp.get('meta/rs')[0,0]
+  Nw = fp.get('meta/nconfig')[0,0]
+  ph = fp.get('meta/ph_bool')[0,0]
+  el = fp.get('meta/elec_bool')[0,0]
+  seedid = np.where(np.array(fh5.split('_')) == 'seed')[0][0]
+  seed = int(fh5.split('_')[seedid+1])
+  savename = 'rs%d_seed%d_Nw%d_el%d_ph%d.mat' % (rs,seed, Nw,el, ph)
+  savename = os.path.join(os.path.dirname(fh5),savename)
+  nevery = np.lcm(fp.get('meta/arrstep')[0,0],fp.get('meta/popstep')[0,0])
+  my_file = Path(savename)
+  if my_file.is_file():
     mat = sio.loadmat(savename)
     counts = mat['gofr']
-  except FileNotFoundError:
+  else:
     print('file does not exist. Generating one...')
-    counts,_ = Calc_3D_gofr(fh5,nx,nevery)
+    counts,_ = Calc_3D_gofr(fh5,nx,nevery,seed)
 
   # visualize: 3D g(r)
   mesh = (nx,)*3
@@ -201,19 +223,20 @@ def calc_closest_factors(c: int):
     
     return [b, a]
 
-def Plot_2D_gofr(files,nx=16,nevery=1000,z0=[-0.5, 0],err=1E-3):
+def Plot_2D_gofr(files,nx=16,cut=['xy','yz'],err=1E-3):
   ''' Plot 2D slices of g(r) from .h5py files. If multiple files given, plot the average (need to interpolate, which I don't feel like doing). z0 can only have two values.'''
-  if len(files) == 1:
-    sz = [1,1]
-  else: 
+
+  if len(files) > 1: #show results from different seeds
     sz = np.array(calc_closest_factors(np.ceil(len(files)/2)*2)).astype(int)
-  # create two figures, one for each value of z0
-  fig, ax = plt.subplots(sz[0],sz[1],figsize=(4.5*sz[1],4*sz[0]))
-  fig2, ax2 = plt.subplots(sz[0],sz[1],figsize=(4.5*sz[1],4*sz[0]))
-  if len(files) > 1:
-    # then create a third figure plotting the average over all different seeds
-    fig3, ax3 = plt.subplots(1,2,figsize=(10,4))
-    avg_z1 = []; avg_z2 = []; avgr_z1 = []; avgr_z2 = []
+    # create two figures, one for each value of z0
+    fig, ax = plt.subplots(sz[0],sz[1],figsize=(3*sz[1],2.5*sz[0]))
+    fig2, ax2 = plt.subplots(sz[0],sz[1],figsize=(3*sz[1],2.5*sz[0]))
+  else:
+    sz = [1,1]
+
+  # then create a third figure plotting the average over all different seeds
+  fig3, ax3 = plt.subplots(1,2,figsize=(10,4))
+  avg_z1 = []; avg_z2 = []; avgr_z1 = []; avgr_z2 = []
   # extract 2D slice
   mesh = (nx,)*3
   rvecs = hamwf_h5.get_rvecs(np.eye(3), mesh)-0.5 #in units of box length
@@ -234,87 +257,96 @@ def Plot_2D_gofr(files,nx=16,nevery=1000,z0=[-0.5, 0],err=1E-3):
       seedid = np.where(np.array(fh5.split('_')) == 'seed')[0][0]
       seed = int(fh5.split('_')[seedid+1])
       savename = 'rs%d_seed%d_Nw%d_el%d_ph%d.mat' % (rs,seed, Nw,el, ph)
-      #savename = 'rs%d_Nw%d_el%d_ph%d.mat' % (rs,Nw,el, ph)
       savename = os.path.join(os.path.dirname(fh5),savename)
+      nevery = fp.get('meta/arrstep')[0,0]
       my_file = Path(savename)
       if my_file.is_file():
         mat = sio.loadmat(savename)
         counts = mat['gofr']
       else:
         print('file does not exist. Generating one...')
-        _, counts = Calc_3D_gofr(fh5,nx,nevery,seed)
+        counts, _ = Calc_3D_gofr(fh5,nx,nevery,seed)
   
       vals = counts.ravel()
-      sel = abs(rvecs[:, 2]-z0[0]) < err
-      sel2 = abs(rvecs[:, 2]-z0[1]) < err
+      
+      # get z=0 cut (xy plane) & x=0 cut (yz plane)
+      sel = abs(rvecs[:, 2]-0) < err
+      sel2 = abs(rvecs[:, 0]-0) < err
+      labs = ['z=0 (xy)','x=0 (yz)']
+      # get theta = pi/4, theta = 3pi/4 slices, i.e. z = sin(pi/4)*0.5 (since plotting goes from -L/2 to L/2)
+      #sel = abs(rvecs[:,2]-0.3) < np.diff(rvecs[:,2])[0]
+      #sel2 = abs(rvecs[:,2] + 0.3) < np.diff(rvecs[:,2])[0]
+      #labs = ['$z=0.3L$','$z=-0.3L$']
       if ct == 0:
         avg_z1 = vals[sel]
         avg_z2 = vals[sel2]
         avgr_z1 = rvecs[sel,:2]
-        avgr_z2 = rvecs[sel2,:2]
+        avgr_z2 = rvecs[sel2,1:]
       else:
         avg_z1 = avg_z1 + vals[sel]
         avg_z2 = avg_z2 + vals[sel2]
         avgr_z1 = avgr_z1 + rvecs[sel,:2]
-        avgr_z2 = avgr_z2 + rvecs[sel2,:2]
+        #avgr_z2 = avgr_z2 + rvecs[sel2,:2]
+        avgr_z2 = avgr_z2 + rvecs[sel2,1:]
 
-      if sz[0] > 1:
-        ax[i,j].set_title(r'seed %d' % seed)
-        ax[i,j].set_xlabel('x/L')
-        ax[i,j].set_ylabel('y/L')
-        cs = kyrt.contour_scatter(ax[i,j], rvecs[sel, :2], vals[sel])#, zlim=zlim)
-        plt.colorbar(cs,ax=ax[i,j])
-        ax2[i,j].set_title(r'seed %d' % seed)
-        ax2[i,j].set_xlabel('x/L')
-        ax2[i,j].set_ylabel('y/L')
-        cs = kyrt.contour_scatter(ax2[i,j], rvecs[sel2, :2], vals[sel2])#, zlim=zlim)
-        plt.colorbar(cs,ax=ax2[i,j])
-      else:
-        if sz[1] == 1:
-          ax.set_title(r'seed %d' % seed)
-          ax.set_xlabel('x/L')
-          ax.set_ylabel('y/L')
-          cs = kyrt.contour_scatter(ax, rvecs[sel, :2], vals[sel])#, zlim=zlim)
-          plt.colorbar(cs,ax=ax)
-
-          ax2.set_title(r'seed %d' % seed)
-          ax2.set_xlabel('x/L')
-          ax2.set_ylabel('y/L')
-          cs = kyrt.contour_scatter(ax2, rvecs[sel2, :2], vals[sel2])#, zlim=zlim)
-          plt.colorbar(cs,ax=ax2)
+      if len(files) > 1:
+        if sz[0] > 1:
+          ax[i,j].set_title(r'seed %d' % seed)
+          ax[i,j].set_xlabel('x/L')
+          ax[i,j].set_ylabel('y/L')
+          ax[i,j].set_aspect(1)
+          cs = kyrt.contour_scatter(ax[i,j], rvecs[sel, :2], vals[sel])#, zlim=zlim)
+          plt.colorbar(cs,ax=ax[i,j])
+          ax2[i,j].set_title(r'seed %d' % seed)
+          ax2[i,j].set_xlabel('y/L')
+          ax2[i,j].set_ylabel('z/L')
+          ax2[i,j].set_aspect(1)
+          cs = kyrt.contour_scatter(ax2[i,j], rvecs[sel2, 1:], vals[sel2])#, zlim=zlim)
+          #cs = kyrt.contour_scatter(ax2[i,j], rvecs[sel2, :2], vals[sel2])#, zlim=zlim)
+          plt.colorbar(cs,ax=ax2[i,j])
         else:
           ax[j].set_title(r'seed %d' % seed)
           ax[j].set_xlabel('x/L')
           ax[j].set_ylabel('y/L')
+          ax[j].set_aspect(1)
           cs = kyrt.contour_scatter(ax[j], rvecs[sel, :2], vals[sel])#, zlim=zlim)
           plt.colorbar(cs,ax=ax[j])
 
           ax2[j].set_title(r'seed %d' % seed)
           ax2[j].set_xlabel('x/L')
           ax2[j].set_ylabel('y/L')
-          cs = kyrt.contour_scatter(ax2[j], rvecs[sel2, :2], vals[sel2])#, zlim=zlim)
+          ax2[j].set_aspect(1)
+          cs = kyrt.contour_scatter(ax2[j], rvecs[sel2,1:], vals[sel2])#, zlim=zlim)
+          #cs = kyrt.contour_scatter(ax2[j], rvecs[sel2,:2], vals[sel2])#, zlim=zlim)
           plt.colorbar(cs,ax=ax2[j])
 
       ct = ct + 1
-
   if len(files) > 1:
-    avg_z1 = avg_z1 / len(files)
-    avgr_z1 = avgr_z1 / len(files)
-    avg_z2 = avg_z2 / len(files)
-    avgr_z2 = avgr_z2 / len(files)
-    cs = kyrt.contour_scatter(ax3[0], avgr_z1, avg_z1)#, zlim=zlim)
-    plt.colorbar(cs,ax=ax3[0])
-    cs = kyrt.contour_scatter(ax3[1], avgr_z2, avg_z2)#, zlim=zlim)
-    plt.colorbar(cs,ax=ax3[1])
-    ax3[0].set_title('z=%.2f' %(z0[0],))
-    ax3[1].set_title('z=%.2f' %(z0[1],))
-    fig3.suptitle('avg over %d seeds' %len(files)
-    fig3.tight_layout()
-  fig.suptitle(r'$r_s$=%d, z = %.2f' % (rs,z0[0]))
-  fig2.suptitle(r'$r_s$=%d, z = %.2f' % (rs,z0[1]))
-  fig.tight_layout()
-  fig2.tight_layout()
+    fig.suptitle(r'$r_s$=%d, %s' % (rs,labs[0]))
+    fig2.suptitle(r'$r_s$=%d, %s' % (rs,labs[1]))
+    fig.tight_layout()
+    fig2.tight_layout()
 
+  avg_z1 = avg_z1 / len(files)
+  avgr_z1 = avgr_z1 / len(files)
+  avg_z2 = avg_z2 / len(files)
+  avgr_z2 = avgr_z2 / len(files)
+  cs = kyrt.contour_scatter(ax3[0], avgr_z1, avg_z1,cmap='plasma')#, zlim=zlim)
+  cb0 = plt.colorbar(cs,ax=ax3[0])
+  cb0.set_label('g(r)',fontsize=axfont)
+  cs = kyrt.contour_scatter(ax3[1], avgr_z2, avg_z2, cmap='plasma')#, zlim=zlim)
+  cb1 = plt.colorbar(cs,ax=ax3[1])
+  cb1.set_label('g(r)',fontsize=axfont)
+  ax3[0].set_title(labs[0])
+  ax3[1].set_title(labs[1])
+  ax3[0].set_aspect(1)
+  ax3[1].set_aspect(1)
+  ax3[0].set_xlabel('x/L',fontsize=axfont)
+  ax3[0].set_ylabel('y/L',fontsize=axfont)
+  ax3[1].set_xlabel('x/L',fontsize=axfont)
+  ax3[1].set_ylabel('y/L',fontsize=axfont)
+  fig3.suptitle('avg over %d seeds' %len(files))
+  fig3.tight_layout()
   plt.show() 
 
 def Plot_1D_gofr(fh5,nx=16,nevery=1000,vec1=[1,0,0], vec2=[1,1,1],err=0.01,plotting=True):
@@ -333,6 +365,7 @@ def Plot_1D_gofr(fh5,nx=16,nevery=1000,vec1=[1,0,0], vec2=[1,1,1],err=0.01,plott
   seed = int(fh5.split('_')[seedid+1])
   savename = 'rs%d_seed%d_Nw%d_el%d_ph%d.mat' % (rs,seed, Nw,el, ph)
   savename = os.path.join(os.path.dirname(fh5),savename)
+  nevery = np.lcm(fp.get('meta/arrstep')[0,0],fp.get('meta/popstep')[0,0])
   my_file = Path(savename)
   if my_file.is_file():
     mat = sio.loadmat(savename)
@@ -400,7 +433,11 @@ def Plot_1D_gofr(fh5,nx=16,nevery=1000,vec1=[1,0,0], vec2=[1,1,1],err=0.01,plott
     plt.show()
   return d1, y1, dr1, dy1, d2, y2, dr2, dy2
 
-def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
+def Plot_1D_gofr_avg(files,nx=16,err=0.01,save=False):
+  ''' Plot average 1D slices over many different seeds. Also overlay the corresponding jellium plots.
+      manyplot: whether to plot the giant plots containing results from all the seeds 
+  '''
+
   from numpy import matlib as mb
   import numpy.ma as ma
 
@@ -410,18 +447,25 @@ def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
     sz = np.array(calc_closest_factors(np.ceil(len(files)/2)*2)).astype(int)
 
   # create two figures, one for an averaged 1D g(r) plot and scattered raw values for each seed
-  fig, ax = plt.subplots(sz[0],sz[1],figsize=(4*sz[1],3.5*sz[0]))
-  fig2, ax2 = plt.subplots(sz[0],sz[1],figsize=(4*sz[1],3.5*sz[0]))
-  if len(files) > 1:
-    # then create a third figure plotting the average over all different seeds
-    fig3, ax3 = plt.subplots(1,1,figsize=(5,4))
-    avg_g1 = []; avg_g2 = []; avgr_g1 = []; avgr_g2 = []
-    avg_g1_err = []; avg_g2_err = [];
+  if len(files) > 1: 
+    fig, ax = plt.subplots(sz[0],sz[1],figsize=(3*sz[1],2.5*sz[0]))
+    fig2, ax2 = plt.subplots(sz[0],sz[1],figsize=(3*sz[1],2.5*sz[0]))
+  #if len(files) > 1:
+  # then create a third figure plotting the average over all different seeds
+  fig3, ax3 = plt.subplots(1,1,figsize=(5,4))
+  avg_g1 = []; avg_g2 = []; avg_g3 = []
+  avgr_g1 = []; avgr_g2 = []; avgr_g3 = []
+  avg_g1_err = []; avg_g2_err = []; avg_g3_err = []
 
+  # focus on high symmetry directions: (100), (110), (111)
   vecs1 = np.array([[1,0,0],[0,1,0],[0,0,1]])
   vecs1 = np.concatenate((vecs1,-vecs1),axis=0)
   vecs2 = np.array([[1,1,1],[1,-1,1],[1,1,-1],[1,-1,-1]])
   vecs2 = np.concatenate((vecs2,-vecs2),axis=0)
+  vecs3 = np.array([[1,1,0],[1,-1,0],[-1,1,0],[-1,-1,0]])
+  vecs3_1 = np.roll(vecs3,1,axis=1)
+  vecs3_2 = np.roll(vecs3,2,axis=1)
+  vecs3 = np.vstack((vecs3,vecs3_1,vecs3_2))
   mesh = (nx,)*3
   rvecs = hamwf_h5.get_rvecs(np.eye(3), mesh)-0.5 #in units of box length
   # 1D cut of g(r) along v1 and v2
@@ -448,6 +492,8 @@ def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
       seed = int(fh5.split('_')[seedid+1])
       savename = 'rs%d_seed%d_Nw%d_el%d_ph%d.mat' % (rs,seed, Nw,el, ph)
       savename = os.path.join(os.path.dirname(fh5),savename)
+      nevery = fp.get('meta/arrstep')[0,0]
+      #print(nevery,fp.get('meta/arrstep')[0,0],fp.get('meta/popstep')[0,0])
       my_file = Path(savename)
       print(seed)
       if my_file.is_file():
@@ -458,7 +504,6 @@ def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
         print('file does not exist. Generating one...')
         gofr, counts = Calc_3D_gofr(fh5,nx,nevery,seed)
 
-
       vals = gofr.ravel()
       dg = vals* np.sqrt(1/counts.ravel() + 1/np.sum(counts)) 
       d1 = np.linalg.norm(rvecs,axis=1)*lbox
@@ -467,6 +512,7 @@ def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
       rcollect = []
       y1collect = []
       y2collect = []
+      y3collect = []
  
       for vec1 in vecs1:
         v1 = vec1/np.linalg.norm(vec1)
@@ -487,13 +533,14 @@ def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
         dy1 = ma.array(dg,mask=~sel1)[sortid1]
         rcollect = np.concatenate((rcollect,ma.array(d1,mask=~sel1[sortid1]).compressed()))
         y1collect = np.concatenate((y1collect,y1.compressed()))
-        if sz[0] > 1:
-          ax2[i,j].errorbar(d1,y1,xerr=dr1,yerr=dy1, fmt='ko-')#,label='along [%d,%d,%d]' %(vec1[0],vec1[1],vec1[2]))
-        else:
-          if sz[1] == 1:
-            ax2.errorbar(d1,y1,xerr=dr1,yerr=dy1, fmt='ko-')#,label='along [%d,%d,%d]' %(vec1[0],vec1[1],vec1[2]))
+        if len(files) > 1:
+          if sz[0] > 1:
+            ax2[i,j].errorbar(d1,y1,xerr=dr1,yerr=dy1, fmt='ko-')#,label='along [%d,%d,%d]' %(vec1[0],vec1[1],vec1[2]))
           else:
-            ax2[j].errorbar(d1,y1,xerr=dr1,yerr=dy1, fmt='ko-')#,label='along [%d,%d,%d]' %(vec1[0],vec1[1],vec1[2]))
+            if sz[1] == 1:
+              ax2.errorbar(d1,y1,xerr=dr1,yerr=dy1, fmt='ko-')#,label='along [%d,%d,%d]' %(vec1[0],vec1[1],vec1[2]))
+            else:
+              ax2[j].errorbar(d1,y1,xerr=dr1,yerr=dy1, fmt='ko-')#,label='along [%d,%d,%d]' %(vec1[0],vec1[1],vec1[2]))
        
       x1 = np.unique(rcollect) 
       plot1 = np.zeros(x1.shape)
@@ -507,22 +554,22 @@ def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
         plot1[n] = np.mean(data1)
         err1[n] = np.std(data1)/np.sqrt(len(data1)) #standard error of mean
 
+      if ct == 0:
+        avg_g1 = np.zeros((len(files),len(x1)))
+        avgr_g1 = np.zeros((len(files),len(x1)))
+        avg_g1_err = np.zeros((len(files),len(x1)))
+      avg_g1[ct,:] = plot1
+      avg_g1_err[ct,:] = err1
+      avgr_g1[ct,:] = x1
+        
       if len(files) > 1:
-        if ct == 0:
-          avg_g1 = np.zeros((len(files),len(x1)))
-          avgr_g1 = np.zeros((len(files),len(x1)))
-          avg_g1_err = np.zeros((len(files),len(x1)))
-        avg_g1[ct,:] = plot1
-        avg_g1_err[ct,:] = err1
-        avgr_g1[ct,:] = x1
-
-      if sz[0] > 1:
-        ax[i,j].errorbar(x1,plot1,yerr=err1, fmt='ko-',label='along [%d,%d,%d]' %(vecs1[0,0],vecs1[0,1],vecs1[0,2]))
-      else:
-        if sz[1] == 1:
-          ax.errorbar(x1,plot1,yerr=err1, fmt='ko-',label='along [%d,%d,%d]' %(vecs1[0,0],vecs1[0,1],vecs1[0,2]))
+        if sz[0] > 1:
+          ax[i,j].errorbar(x1,plot1,yerr=err1, fmt='ko-',label='along [%d,%d,%d]' %(vecs1[0,0],vecs1[0,1],vecs1[0,2]))
         else:
-          ax[j].errorbar(x1,plot1,yerr=err1, fmt='ko-',label='along [%d,%d,%d]' %(vecs1[0,0],vecs1[0,1],vecs1[0,2]))
+          if sz[1] == 1:
+            ax.errorbar(x1,plot1,yerr=err1, fmt='ko-',label='along [%d,%d,%d]' %(vecs1[0,0],vecs1[0,1],vecs1[0,2]))
+          else:
+            ax[j].errorbar(x1,plot1,yerr=err1, fmt='ko-',label='along [%d,%d,%d]' %(vecs1[0,0],vecs1[0,1],vecs1[0,2]))
 
       rcollect=[]
       for vec2 in vecs2:
@@ -541,25 +588,26 @@ def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
         dy2 = ma.array(dg,mask=~sel2)[sortid1]
         rcollect = np.concatenate((rcollect,ma.array(d1,mask=~sel2[sortid1]).compressed()))
         y2collect = np.concatenate((y2collect,y2.compressed()))
-        if sz[0] > 1:
-          ax2[i,j].errorbar(d1,y2,xerr=dr2,yerr=dy2, fmt='ro-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
-          ax2[i,j].set_xlabel('r')
-          ax2[i,j].set_ylabel('g(r)')
-          ax2[i,j].set_title('seed %d' %seed)
-          #ax2[i,j].legend()
-        else:
-          if sz[1] == 1:
-            ax2.errorbar(d1,y2,xerr=dr2,yerr=dy2, fmt='ro-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
-            ax2.set_xlabel('r')
-            ax2.set_ylabel('g(r)')
-            ax2.set_title('seed %d' %seed)
-            #ax2.legend()
+        if len(files) > 1:
+          if sz[0] > 1:
+            ax2[i,j].errorbar(d1,y2,xerr=dr2,yerr=dy2, fmt='ro-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
+            ax2[i,j].set_xlabel('r')
+            ax2[i,j].set_ylabel('g(r)')
+            ax2[i,j].set_title('seed %d' %seed)
+            #ax2[i,j].legend()
           else:
-            ax2[j].errorbar(d1,y2,xerr=dr2,yerr=dy2, fmt='ro-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
-            ax2[j].set_xlabel('r')
-            ax2[j].set_ylabel('g(r)')
-            ax2[j].set_title('seed %d' %seed)
-            #ax2[j].legend()
+            if sz[1] == 1:
+              ax2.errorbar(d1,y2,xerr=dr2,yerr=dy2, fmt='ro-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
+              ax2.set_xlabel('r')
+              ax2.set_ylabel('g(r)')
+              ax2.set_title('seed %d' %seed)
+              #ax2.legend()
+            else:
+              ax2[j].errorbar(d1,y2,xerr=dr2,yerr=dy2, fmt='ro-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
+              ax2[j].set_xlabel('r')
+              ax2[j].set_ylabel('g(r)')
+              ax2[j].set_title('seed %d' %seed)
+              #ax2[j].legend()
     
       x2 = np.unique(rcollect) 
       plot2 = np.zeros(x2.shape)
@@ -572,64 +620,459 @@ def Plot_1D_gofr_avg(files,nx=16,nevery=1000,err=0.01):
         plot2[n] = np.mean(data2)
         err2[n] = np.std(data2)/np.sqrt(len(data2)) #standard error of mean
 
-      if sz[0] > 1:
-        ax[i,j].errorbar(x2,plot2,yerr=err2, fmt='ro-',label='along [%d,%d,%d]' %(vecs2[0,0],vecs2[0,1],vecs2[0,2]))
-        ax[i,j].set_xlabel('r')
-        ax[i,j].set_ylabel('g(r)')
-        ax[i,j].set_title('seed %d' %seed)
-        ax[i,j].legend()
-      else:
-        if sz[1] == 1:
-          ax.errorbar(x2,plot2,yerr=err2, fmt='ro-',label='along [%d,%d,%d]' %(vecs2[0,0],vecs2[0,1],vecs2[0,2]))
-          ax.set_xlabel('r')
-          ax.set_ylabel('g(r)')
-          ax.set_title('seed %d' %seed)
-          ax.legend()
+      if len(files) > 1:
+        if sz[0] > 1:
+          ax[i,j].errorbar(x2,plot2,yerr=err2, fmt='ro-',label='along [%d,%d,%d]' %(vecs2[0,0],vecs2[0,1],vecs2[0,2]))
+          ax[i,j].set_xlabel('r')
+          ax[i,j].set_ylabel('g(r)')
+          ax[i,j].set_title('seed %d' %seed)
+          ax[i,j].legend()
         else:
-          ax[j].errorbar(x2,plot2,yerr=err2, fmt='ro-',label='along [%d,%d,%d]' %(vecs2[0,0],vecs2[0,1],vecs2[0,2]))
-          ax[j].set_xlabel('r')
-          ax[j].set_ylabel('g(r)')
-          ax[j].set_title('seed %d' %seed)
-          ax[j].legend()
+          if sz[1] == 1:
+            ax.errorbar(x2,plot2,yerr=err2, fmt='ro-',label='along [%d,%d,%d]' %(vecs2[0,0],vecs2[0,1],vecs2[0,2]))
+            ax.set_xlabel('r')
+            ax.set_ylabel('g(r)')
+            ax.set_title('seed %d' %seed)
+            ax.legend()
+          else:
+            ax[j].errorbar(x2,plot2,yerr=err2, fmt='ro-',label='along [%d,%d,%d]' %(vecs2[0,0],vecs2[0,1],vecs2[0,2]))
+            ax[j].set_xlabel('r')
+            ax[j].set_ylabel('g(r)')
+            ax[j].set_title('seed %d' %seed)
+            ax[j].legend()
 
+      if ct == 0:
+        avg_g2 = np.zeros((len(files),len(x2)))
+        avgr_g2 = np.zeros((len(files),len(x2)))
+        avg_g2_err = np.zeros((len(files),len(x2)))
+      avg_g2[ct,:] = plot2
+      avg_g2_err[ct,:] = err2
+      avgr_g2[ct,:] = x2
+        
+      rcollect=[]
+      for vec3 in vecs3:
+        v3 = vec3/np.linalg.norm(vec3)
+        s3 = np.sum(v3*r,axis=1)
+        s3[s3>1] = 1; s3[s3<-1] = -1;
+        thetas3 = np.arccos(s3)
+  
+        sel3 = np.array(abs(thetas3) < err)
+        # define x axis (distance along cut)
+        mask3 = np.tile(sel3,(3,1)).T
+        r3 = ma.array(rvecs,mask=~mask3)
+
+        y3 = ma.array(vals,mask=~sel3)[sortid1]
+        dr3 = (d1*np.tan(ma.array(thetas3,mask=~sel3))*err)[sortid1]
+        dy3 = ma.array(dg,mask=~sel3)[sortid1]
+        rcollect = np.concatenate((rcollect,ma.array(d1,mask=~sel3[sortid1]).compressed()))
+        y3collect = np.concatenate((y3collect,y3.compressed()))
+        if len(files) > 1:
+          if sz[0] > 1:
+            ax2[i,j].errorbar(d1,y3,xerr=dr3,yerr=dy3, fmt='bo-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
+            ax2[i,j].set_xlabel('r')
+            ax2[i,j].set_ylabel('g(r)')
+            ax2[i,j].set_title('seed %d' %seed)
+            #ax2[i,j].legend()
+          else:
+            if sz[1] == 1:
+              ax2.errorbar(d1,y3,xerr=dr3,yerr=dy3, fmt='bo-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
+              ax2.set_xlabel('r')
+              ax2.set_ylabel('g(r)')
+              ax2.set_title('seed %d' %seed)
+              #ax2.legend()
+            else:
+              ax2[j].errorbar(d1,y3,xerr=dr3,yerr=dy3, fmt='bo-')#,label='along [%d,%d,%d]' %(vec2[0],vec2[1],vec2[2]))
+              ax2[j].set_xlabel('r')
+              ax2[j].set_ylabel('g(r)')
+              ax2[j].set_title('seed %d' %seed)
+              #ax2[j].legend()
+    
+      x3 = np.unique(rcollect) 
+      plot3 = np.zeros(x3.shape)
+      err3 = np.zeros(x3.shape)
+      for n,d in enumerate(x3):
+        idx = (rcollect == d)
+        # average over preexisting bins. Calculate errors of these averages as weighted by 1/sqrt(N)
+        # err = SD(data)/sqrt(len(data))
+        data3 = y3collect[idx]
+        plot3[n] = np.mean(data3)
+        err3[n] = np.std(data3)/np.sqrt(len(data3)) #standard error of mean
 
       if len(files) > 1:
-        if ct == 0:
-          avg_g2 = np.zeros((len(files),len(x2)))
-          avgr_g2 = np.zeros((len(files),len(x2)))
-          avg_g2_err = np.zeros((len(files),len(x2)))
-        avg_g2[ct,:] = plot2
-        avg_g2_err[ct,:] = err2
-        avgr_g2[ct,:] = x2
+        if sz[0] > 1:
+          ax[i,j].errorbar(x3,plot3,yerr=err3, fmt='bo-',label='along [%d,%d,%d]' %(vecs3[0,0],vecs3[0,1],vecs3[0,2]))
+          ax[i,j].set_xlabel('r')
+          ax[i,j].set_ylabel('g(r)')
+          ax[i,j].set_title('seed %d' %seed)
+          ax[i,j].legend()
+        else:
+          if sz[1] == 1:
+            ax.errorbar(x3,plot3,yerr=err3, fmt='bo-',label='along [%d,%d,%d]' %(vecs3[0,0],vecs3[0,1],vecs3[0,2]))
+            ax.set_xlabel('r')
+            ax.set_ylabel('g(r)')
+            ax.set_title('seed %d' %seed)
+            ax.legend()
+          else:
+            ax[j].errorbar(x3,plot3,yerr=err3, fmt='bo-',label='along [%d,%d,%d]' %(vecs3[0,0],vecs3[0,1],vecs3[0,2]))
+            ax[j].set_xlabel('r')
+            ax[j].set_ylabel('g(r)')
+            ax[j].set_title('seed %d' %seed)
+            ax[j].legend()
+      
+      if ct == 0:
+        avg_g3 = np.zeros((len(files),len(x3)))
+        avgr_g3 = np.zeros((len(files),len(x3)))
+        avg_g3_err = np.zeros((len(files),len(x3)))
+      avg_g3[ct,:] = plot3
+      avg_g3_err[ct,:] = err3
+      avgr_g3[ct,:] = x3
       ct = ct + 1
   
-  fig.suptitle('avg over symm. dir, $r_s=%d$, L = %.2f' %(rs,lbox))
-  fig2.suptitle('scatter over symm. dir, $r_s=%d$, L = %.2f' %(rs,lbox))
-  fig.tight_layout()
-  fig2.tight_layout()
-
+  #now overlay jellium results for comparison
+  #jellfile=files[0].split('ph')[0] + 'ph0' + files[0].split('ph')[1][1:]
+  # check whether jellium file exists - if not, be sad
+  if save:
+      infodict = {'vecs1': vecs1, 'vecs2': vecs2, 'vecs3': vecs3, 'g1_avg': avg_g1, 'g1_avg_err': avg_g1_err, 'g1_avg_r': avgr_g1, 'g2_avg': avg_g2, 'g2_avg_err': avg_g2_err, 'g2_avg_r': avgr_g2, 'g3_avg': avg_g3, 'g3_avg_err': avg_g3_err, 'g3_avg_r': avgr_g3}
+      sname = savename.split('seed')[0]+'_'.join(savename.split('seed')[1].split('_')[1:])
+      sname = os.path.splitext(sname)[0] + '_1d_avg' + os.path.splitext(sname)[1] 
+      print(sname)
+      sio.savemat(sname,infodict)
   if len(files) > 1:
+    fig.suptitle('avg over symm. dir, $r_s=%d$, L = %.2f' %(rs,lbox))
+    fig2.suptitle('scatter over symm. dir, $r_s=%d$, L = %.2f' %(rs,lbox))
+    fig.tight_layout()
+    fig2.tight_layout()
+
     plot3a = np.mean(avg_g1,axis=0)
-    err3a = plot3a/len(files)*np.sqrt(np.sum(avg_g1_err**2,axis=0))
-    x3a = np.mean(avgr_g1,axis=0)
-    ax3.errorbar(x3a,plot3a,yerr=err3a,fmt='ko-',label='avg along [%d,%d,%d]' %(vecs1[0,0],vecs1[0,1],vecs1[0,2]))
+    err3a = np.std(avg_g1,axis=0)/np.sqrt(len(files)) #plot3a/len(files)*np.sqrt(np.sum(avg_g1_err**2,axis=0))
 
     plot3b = np.mean(avg_g2,axis=0)
-    err3b = plot3b/len(files)*np.sqrt(np.sum(avg_g2_err**2,axis=0))
-    x3b = np.mean(avgr_g2,axis=0)
-    ax3.errorbar(x3b,plot3b,yerr=err3b,fmt='ro-',label='avg along [%d,%d,%d]' %(vecs2[0,0],vecs2[0,1],vecs2[0,2]))
-    ax3.legend()
-    fig3.suptitle('$r_s = %d$, avg over %d seeds' %(rs, len(files)))
-    fig3.tight_layout()
+    err3b = np.std(avg_g2,axis=0)/np.sqrt(len(files)) #plot3b/len(files)*np.sqrt(np.sum(avg_g2_err**2,axis=0))
+
+    plot3c = np.mean(avg_g3,axis=0)
+    err3c = np.std(avg_g3,axis=0)/np.sqrt(len(files)) 
+  else: 
+    plot3a = avg_g1[0,:]
+    err3a = avg_g1_err[0,:]
+    plot3b = avg_g2[0,:]
+    err3b = avg_g2_err[0,:]
+    plot3c = avg_g3[0,:]
+    err3c = avg_g3_err[0,:]
+
+  x3a = np.mean(avgr_g1,axis=0)
+  x3b = np.mean(avgr_g2,axis=0)
+  x3c = np.mean(avgr_g3,axis=0)
+    
+  ax3.errorbar(x3a,plot3a,yerr=err3a,fmt='ko-',label='avg along [%d,%d,%d]' %(vecs1[0,0],vecs1[0,1],vecs1[0,2]))
+  ax3.errorbar(x3b,plot3b,yerr=err3b,fmt='ro-',label='avg along [%d,%d,%d]' %(vecs2[0,0],vecs2[0,1],vecs2[0,2]))
+  ax3.errorbar(x3c,plot3c,yerr=err3c,fmt='bo-',label='avg along [%d,%d,%d]' %(vecs3[0,0],vecs3[0,1],vecs3[0,2]))
+  ax3.set_xlabel('r')
+  ax3.set_ylabel('g(r)')
+  ax3.legend()
+  fig3.suptitle('$r_s = %d$, avg over %d seeds' %(rs, len(files)))
+  fig3.tight_layout()
   plt.show()
 
+def Comp_elph_jell(folder):
+  ''' 
+  compare 1D slices of g(r) between phonon simulations and jellium simulations. Need to first run Plot_1D_gofr_avg 
+  '''
+  #savename = 'rs%d_Nw%d_el%d_ph%d_1d_avg.mat' % (rs,seed, Nw,el, ph)
+  #savename = os.path.join(os.path.dirname(fh5),savename)
+  filename = '*_1d_avg.mat'
+  results = glob.glob(os.path.join(folder,filename))
+  phvals = [int(name.split('ph')[1].split('_')[0]) for name in results]
+  print(phvals)
+  labs = ['el_ph' if ph else 'jell' for ph in phvals]
+  print(labs) 
+  colors = ['k' if ph else 'r' for ph in phvals]
+  rs = int(folder.split('rs')[1].split('_')[0])
+  L = (4*np.pi/3*2)**(1/3) * rs #sys size
+  eta = float(folder.split('eta')[1].split('_')[0])
+  l = int(folder.split('l')[1].split('/')[0])
+  fig,ax = plt.subplots(1,1,figsize=(6,5))
+  mat1 = sio.loadmat(results[0])
+  mat2 = sio.loadmat(results[1])
+  vecs1 = mat1['vecs1']
+  vecs2 = mat1['vecs2']
+  vecs3 = mat1['vecs3']
+  g1a = mat1['g1_avg']
+  g1a_err = mat1['g1_avg_err']
+  g1b = mat1['g2_avg']
+  g1b_err = mat1['g2_avg_err']
+  g1c = mat1['g3_avg']
+  g1c_err = mat1['g3_avg_err']
+  r1a = mat1['g1_avg_r']
+  r1b = mat1['g2_avg_r']
+  r1c = mat1['g3_avg_r']
+  if g1a.shape[0] == 1:
+    g1a = g1a[0]
+    g1a_err = g1a_err[0]
+    r1a = r1a[0]
+    r1b = r1b[0]
+    r1c = r1c[0]
+    g1b = g1b[0]
+    g1b_err = g1b_err[0]
+    g1c = g1c[0]
+    g1c_err = g1c_err[0]
+  elif g1a.shape[0] > 1:
+    g1a = np.mean(g1a,axis=0)
+    g1a_err = np.std(g1a,axis=0)/g1a.shape[0]
+    g1b = np.mean(g1b,axis=0)
+    g1b_err = np.std(g1b,axis=0)/g1b.shape[0]
+    g1c = np.mean(g1b,axis=0)
+    g1c_err = np.std(g1b,axis=0)/g1c.shape[0]
+    r1a = np.mean(r1a,axis=0)
+    r1b = np.mean(r1b,axis=0)
+    r1c = np.mean(r1c,axis=0)
+  g2a = mat2['g1_avg']
+  g2a_err = mat2['g1_avg_err']
+  g2b = mat2['g2_avg']
+  g2b_err = mat2['g2_avg_err']
+  g2c = mat2['g3_avg']
+  g2c_err = mat2['g3_avg_err']
+  r2a = mat2['g1_avg_r'][0]
+  r2b = mat2['g2_avg_r'][0]
+  r2c = mat2['g3_avg_r'][0]
+  if g2a.shape[0] == 1:
+    g2a = g2a[0]
+    g2a_err = g2a_err[0]
+    g2b = g2b[0]
+    g2b_err = g2b_err[0]
+    g2c = g2c[0]
+    g2c_err = g2c_err[0]
+  elif g2a.shape[0] > 1:
+    g2a_err = np.std(g2a,axis=0)/g2a.shape[0]
+    g2a = np.mean(g2a,axis=0)
+    g2b_err = np.std(g2b,axis=0)/g2b.shape[0]
+    g2b = np.mean(g2b,axis=0)
+    g2c_err = np.std(g2c,axis=0)/g2c.shape[0]
+    g2c = np.mean(g2c,axis=0)
+  scale=eta
+  ax.errorbar(r1a,g1a,yerr=g1a_err,color=colors[0], fmt='o-',label='[%d,%d,%d] %s' %(vecs1[0,0],vecs1[0,1],vecs1[0,2],labs[0]))
+  ax.errorbar(r1b,g1b,yerr=g1b_err,color=colors[0],fmt='o--',label='[%d,%d,%d] %s' %(vecs2[0,0],vecs2[0,1],vecs2[0,2],labs[0]))
+  ax.errorbar(r1c,g1c,yerr=g1c_err,color=colors[0],fmt='o:',label='[%d,%d,%d] %s' %(vecs3[0,0],vecs3[0,1],vecs3[0,2],labs[0]))
+  ax.errorbar(r2a,g2a*scale,yerr=g2a_err,color=colors[1],fmt='o-',label='[%d,%d,%d] %s' %(vecs1[0,0],vecs1[0,1],vecs1[0,2],labs[1]))
+  ax.errorbar(r2b,g2b*scale,yerr=g2b_err,color=colors[1],fmt='o--',label='[%d,%d,%d] %s' %(vecs2[0,0],vecs2[0,1],vecs2[0,2],labs[1]))
+  ax.errorbar(r2c,g2c*scale,yerr=g2c_err,color=colors[1],fmt='o:',label='[%d,%d,%d] %s' %(vecs3[0,0],vecs3[0,1],vecs3[0,2],labs[1]))
+  ax.set_xlabel('r',fontsize=axfont)
+  ax.set_ylabel('g(r)',fontsize=axfont)
+  ax.legend(fontsize=legfont)
+ 
+  fig.suptitle('$r_s = %d, (\eta, l) = (%.2f, %.2f)$' %(rs, eta,l),fontsize=titlefont)
+  fig.tight_layout()
+  plt.show()
+
+def Calc_g_rthetaphi(files,nx=16,err=0.01,save=False,nbins_r=12,nbins_theta=10,nbins_phi=10,cutoff=0.5):
+  '''
+    avg over all theta to get g(r), and avg over all r,phi to get g(theta)
+    g(theta) ideally encodes information about the bipolaron bound state anisotropy
+    Have to select region of constant radius r + dr for angular averages, or else box corners (theta = pi/4) will get overrepresented
+  '''
+
+  thetabins = np.linspace(0,np.pi,nbins_theta+1)
+  phibins = np.linspace(0,2*np.pi,nbins_phi+1)
+  fig, ax = plt.subplots(1,3,figsize=(12,4))
+
+  mesh = (nx,)*3
+  rvecs = hamwf_h5.get_rvecs(np.eye(3), mesh)-0.5 #in units of box length
+  # 1D cut of g(r) along v1 and v2
+  # pick out points along these two lines by comparing alignment between angles and vectors
+  norms = mb.repmat(np.linalg.norm(rvecs,axis=1),3,1).T
+  r = rvecs/norms
+  r[np.isnan(r)] = 0
+  
+  # get angles
+  thetas = np.arctan2(rvecs[:,2],np.sqrt(rvecs[:,0]**2+rvecs[:,1]**2))
+  thetas = np.abs(thetas - np.pi/2) #map to [0,pi]
+  distnorms = np.linalg.norm(rvecs,axis=1)
+  #R = 0.12
+  #dR = 0.1*R
+  tmask = (distnorms < cutoff) # & (distnorms >= R-dR)
+  print(len(tmask),np.sum(tmask))
+  thetas = ma.array(thetas,mask=~tmask)
+  '''
+  # visualize what I'm cutting
+  fig2,ax2 = plt.subplots(1,1)
+  for x in np.unique(rvecs[:,0]):
+    ax2.axvline(x)
+  for y in np.unique(rvecs[:,1]):
+    ax2.axhline(y)
+  fis = np.linspace(0,2*np.pi,101)
+  ax2.plot(0.5*np.cos(fis),0.5*np.sin(fis),'r')
+  ax2.set_aspect(1)
+  plt.show()
+  '''
+  
+  phis = np.arctan2(rvecs[:,1],rvecs[:,0])
+  phis = np.mod(phis,2*np.pi)
+  phis = ma.array(phis,mask=~tmask) 
+
+  #check for jellium file for comparison
+  splstr = files[0].split('ph')
+  spl2 = splstr[1].split('_')
+  if spl2[0] != '0':
+    filename = 'DMC_*_el1_ph0_*_nstep_*_*.h5'
+    results = glob.glob(os.path.join(os.path.dirname(files[0]),filename))
+    jellfile = results[0]
+    #spl2[0] = '0'
+    #jellfile = splstr[0] + 'ph' + '_'.join(spl2)
+
+    fp = h5py.File(jellfile, 'r')
+    rs = fp.get('meta/rs')[0,0]
+    Nw = fp.get('meta/nconfig')[0,0]
+    jellname = 'rs%d_seed0_Nw%d_el1_ph0.mat' % (rs,Nw)
+    jellname = os.path.join(os.path.dirname(jellfile),jellname)
+    print(jellfile)
+    if Path(jellname).is_file():
+      files.append(jellfile) 
+      jell = True
+    else:
+      print('no jellium file found...')
+      #jell = False
+      _,_ = Calc_3D_gofr(jellfile,nx,nevery,seed)
+      jell = True
+  else:
+    # if the jellium file has already been specified
+    jell = False
+
+  grcollect = np.zeros((len(files),nbins_r)) #g(r)
+  gtcollect = np.zeros((len(files),nbins_theta)) #g(theta)
+  gpcollect = np.zeros((len(files),nbins_phi)) #g(phi)
+  grerr = np.zeros((len(files),nbins_r))
+  gterr = np.zeros((len(files),nbins_theta)) #g(theta)
+  gperr = np.zeros((len(files),nbins_phi)) #g(phi)
+
+  for i in range(len(files)):
+      print(i)
+      # to load data
+      fh5 = files[i]
+      fp = h5py.File(fh5, 'r')
+      rs = fp.get('meta/rs')[0,0]
+      Nw = fp.get('meta/nconfig')[0,0]
+      ph = fp.get('meta/ph_bool')[0,0]
+      el = fp.get('meta/elec_bool')[0,0]
+      lbox = fp.get('meta/L')[0,0]
+      eta = fp.get('meta/eta')[0,0]
+      l = fp.get('meta/l')[0,0]
+      seedid = np.where(np.array(fh5.split('_')) == 'seed')[0][0]
+      seed = int(fh5.split('_')[seedid+1])
+      savename = 'rs%d_seed%d_Nw%d_el%d_ph%d.mat' % (rs,seed, Nw,el, ph)
+      savename = os.path.join(os.path.dirname(fh5),savename)
+
+      nevery = fp.get('meta/arrstep')[0,0]
+      my_file = Path(savename)
+      if my_file.is_file():
+        mat = sio.loadmat(savename)
+        gofr = mat['gofr']
+        counts = mat['counts']
+      else:
+        print('file does not exist. Generating one...')
+        gofr, counts = Calc_3D_gofr(fh5,nx,nevery,seed)
+
+      vals = gofr.ravel()
+      dg = vals* np.sqrt(1/counts.ravel() + 1/np.sum(counts)) 
+      # get distances
+      d1 = np.linalg.norm(rvecs,axis=1)*lbox
+      sortid1 = np.argsort(d1)
+      d1 = d1[sortid1] #sort box distances from smallest to largest
+      rbins = np.linspace(0,lbox,nbins_r+1) 
+
+      sortids_r = np.digitize(d1,rbins) #sort distances from origin into binsto get g(r)
+      for j in range(len(rbins)-1):
+        binids = sortids_r == j+1 #sorting indices start at 1
+        rb = d1[binids]
+        valb = vals[sortid1][binids]
+        grcollect[i,j] = np.mean(valb)            
+        grerr[i,j] = np.std(valb)/np.sqrt(len(valb))
+
+      sortid2 = np.argsort(thetas)
+      thetasort = thetas[sortid2] #sort polar angles from smallest to largest
+      sortids_theta = np.digitize(thetasort,thetabins)
+      sortids_theta = ma.array(sortids_theta,mask=ma.getmask(thetasort))
+      for j in range(len(thetabins)-1):
+        binids = sortids_theta == j+1 #sorting indices start at 1
+        thb = thetasort[binids]
+        valb = vals[sortid2][binids]
+        gtcollect[i,j] = np.mean(valb)            
+        gterr[i,j] = np.std(valb)/np.sqrt(len(valb))
+
+      sortid3 = np.argsort(phis)
+      phisort = phis[sortid3] #sort azimuthal angles from smallest to largest
+      sortids_phi = ma.array(np.digitize(phisort,phibins),mask=ma.getmask(phisort))
+      for j in range(len(phibins)-1):
+        binids = sortids_phi == j+1 #sorting indices start at 1
+        phb = phisort[binids]
+        valb = vals[sortid3][binids]
+        gpcollect[i,j] = np.mean(valb)            
+        gperr[i,j] = np.std(valb)/np.sqrt(len(valb))
+  if jell:
+    jell_gr = grcollect[-1,:]
+    jell_gt = gtcollect[-1,:]
+    jell_gp = gpcollect[-1,:]
+    grcollect = grcollect[:-1,:]
+    gtcollect = gtcollect[:-1,:]
+    gpcollect = gpcollect[:-1,:]
+    jell_gr_err = grerr[-1,:]
+    jell_gt_err = gterr[-1,:]
+    jell_gp_err = gperr[-1,:]
+    grerr = grerr[:-1,:]
+    gterr = gterr[:-1,:]
+    gperr = gperr[:-1,:]
+    files.pop(-1)
+
+  gravg = np.mean(grcollect,axis=0)
+  gtavg = np.mean(gtcollect,axis=0)
+  gpavg = np.mean(gpcollect,axis=0)
+  if len(files) > 1:
+    gravg_err = np.std(grcollect,axis=0)/np.sqrt(len(files))
+    gtavg_err = np.std(gtcollect,axis=0)/np.sqrt(len(files))
+    gpavg_err = np.std(gpcollect,axis=0)/np.sqrt(len(files))
+  else:
+    gravg_err = grerr[0,:]
+    gtavg_err = gterr[0,:]
+    gpavg_err = gperr[0,:]
+  rbincents = (rbins[:-1] + rbins[1:])/2
+  thbincents = (thetabins[:-1] + thetabins[1:])/2
+  phibincents = (phibins[:-1] + phibins[1:])/2
+
+  ax[0].errorbar(rbincents,gravg,yerr=gravg_err,fmt='ko-',label='el+ph')
+  ax[1].errorbar(thbincents,gtavg,yerr=gtavg_err,fmt='ko-',label='el+ph')
+  ax[2].errorbar(phibincents,gpavg,yerr=gpavg_err,fmt='ko-',label='el+ph')
+  if jell:
+    ax[0].errorbar(rbincents,jell_gr,yerr=jell_gr_err,fmt='ro-',label='jell')
+    ax[1].errorbar(thbincents,jell_gt,yerr=jell_gt_err,fmt='ro-',label='jell')
+    ax[2].errorbar(phibincents,jell_gp,yerr=jell_gp_err,fmt='ro-',label='jell')
+
+  # FIX THIS
+  if save:
+    infodict = {'rbins': rbins, 'gr_avg': gravg, 'gr_avg_err': gravg_err, 'g1_avg_r': avgr_g1, 'g2_avg': avg_g2, 'g2_avg_err': avg_g2_err, 'g2_avg_r': avgr_g2}
+    sname = savename.split('seed')[0]+'_'.join(savename.split('seed')[1].split('_')[1:])
+    sname = os.path.splitext(sname)[0] + '_1d_avg_spherical' + os.path.splitext(sname)[1] 
+    print(sname)
+    sio.savemat(sname,infodict)
+
+  ax[0].set_xlabel('r')
+  ax[0].set_ylabel('g(r)')
+  ax[0].legend()
+  ax[1].set_xlabel('$\\theta$')
+  ax[1].set_ylabel('g($\\theta$)')
+  ax[1].legend()
+  ax[2].set_xlabel('$\phi$')
+  ax[2].set_ylabel('$g(\phi)$')
+  ax[2].legend()
+  #ax[0].legend()
+  fig.suptitle('$r_s = %d$ (L = %.2f), ($\eta$,l) = (%.1f, %.1f), avg over %d seeds' %(rs,lbox,eta,l, len(files)))
+  fig.tight_layout()
+  plt.show()
+  
 def Plot_sofk(fh5,nevery=1000):
   ''' Plot structure factor'''
 
   fp = h5py.File(fh5, 'r')
   rs = fp.get('meta/rs')[0,0]
   lbox = fp.get('meta/L')[0,0]
-  dt, posa = sugar.time(extract_walkers)(fp, nevery)
+  dt, posa,_ = sugar.time(extract_walkers)(fp, nevery)
   fp.close()
   nconf, nwalker, nelec, ndim = posa.shape
   #msg = 'extracted %d frames in %.4f s' % (nconf, dt)
@@ -688,192 +1131,38 @@ def PlotElecDensities(fh5):
   plt.tight_layout()
   plt.show()
 
-# SPLIT THIS FUNCTION UP INTO MULTIPLE PARTS
-# OVERLAY jellium result with el-ph
-def main():
-  import pandas as pd
-  import os
-  import scipy.io as sio
-  from mpl_toolkits.axes_grid1 import make_axes_locatable
-  
-  nbin = 64  # nbin in 1D g(r)
-  nx = 16  # nbin per direction in 3D g(x, y, z)
-  nevery = 1000  # how often to extract trajectory
-
-  # trajectory file
-  #rs = 110
-  #fh5 = '/mnt/home/llin1/scratch/E_Nw_tests/rs%d_nconfig512_data/DMC_bind_diffusion_0_el1_ph0_rs_110_popsize_512_seed_0_N_15_eta_0.00_l_5.00_nstep_405000_popstep10_tau_2.75.h5' % rs
-
-  # jellium
-  #fh5 = '/mnt/home/llin1/scratch/E_Nw_tests/jell_rs%d_nconfig512_data/DMC_bind_diffusion_0_el1_ph0_rs_30_popsize_512_seed_0_N_15_eta_0.00_l_5.00_nstep_210000_popstep10_tau_0.75.h5' % rs
-  # "bound" state
-  fh5 = '/mnt/home/llin1/scratch/E_Nw_tests/rs30_nconfig512_data/DMC_bind_diffusion_0_el1_ph1_rs_30_popsize_512_seed_0_N_15_eta_0.00_l_5.00_nstep_140000_popstep150_tau_0.75.h5'
-
-  #rs = 5
-  #fh5 = '/mnt/home/llin1/scratch/E_Nw_tests/rs%d_nconfig512_data/DMC_bind_diffusion_0_el1_ph0_rs_5_popsize_512_seed_0_N_15_eta_0.00_l_5.00_nstep_100000_popstep10_tau_0.12.h5' % rs
-
-
-  # step 1: extract electron positions
+def PlotWalkerWeights(fh5,nevery=200,nequil=0):
+  '''Plot walker weights to make sure they're not fluctuating like crazy'''
   fp = h5py.File(fh5, 'r')
   rs = fp.get('meta/rs')[0,0]
+  Nw = fp.get('meta/nconfig')[0,0]
   lbox = fp.get('meta/L')[0,0]
-  dt, posa = sugar.time(extract_walkers)(fp, nevery)
+  ph = fp.get('meta/ph_bool')[0,0]
+  el = fp.get('meta/elec_bool')[0,0]
+  
+  dt, data = sugar.time(extract_walkers)(fp, nevery,nequil)
+  posa, wts = data
   fp.close()
+  print(wts.shape)
+  print(posa.shape)
   nconf, nwalker, nelec, ndim = posa.shape
   msg = 'extracted %d frames in %.4f s' % (nconf, dt)
   print(msg)
-
-  # step 2: calculate displacement vectors
-  dt, disps = sugar.time(calculate_displacements)(posa, lbox)
-  msg = 'calculate displacements in %.4f s' % dt
-  print(msg)
-
-  # step 3: calculate isotropic g(r)
-  dt, (myx, grm, gre) = sugar.time(box_gofr)(disps, lbox, nelec, nbin=nbin)
-  msg = 'histogrammed g(r) in %.4f s' % dt
-  print(msg)
-
-  # data: save g(r)
-  #data = np.c_[myx, grm, gre]
-  #np.savetxt('rs%d-ne%d-gofr.dat' % (rs, nevery), data)
   
-  # visualize: plot g(r)
-  fig1, ax1 = plt.subplots()
-  ax1.set_xlabel('r')
-  ax1.set_ylabel('g(r)')
-  #ax1.set_ylim(0, 2)
-
-  ax1.errorbar(myx, grm, gre)
-  
-  # step 4: 3D g(x, y, z)
-
-  # symmetrize displacement
-  xyz = np.r_[disps, -disps].reshape(-1, 3)
-  # bin in 3D
-  counts = box_gr3d(xyz, lbox, nbin=nx)
-
-  # data: save 3D g(r)
-  data = dict(
-    data = counts,
-    axes = lbox*np.eye(3),
-    origin = -lbox/2*np.ones(3),
-  )
-  '''
-  try:
-    volumetric.write_gaussian_cube('rs%d.cube' % rs, data)
-  except:
-    # to load data
-    cubedat = volumetric.read_gaussian_cube('rs%d.cube' % rs)
-    counts = np.array(cubedat['data'])
-    
-  '''
-  # visualize: 3D g(r)
-  mesh = (nx,)*3
-  rvecs = hamwf_h5.get_rvecs(np.eye(3), mesh)-0.5 #in units of box length
-  zlim = (0, 5.5)
-  # 3D
-  vals = counts.ravel()
-  sel = vals > 2
-   
-  fig, ax = volumetric.figax3d()
-  ax.set_xlim(-0.5, 0.5)
-  ax.set_ylim(-0.5, 0.5)
-  ax.set_zlim(-0.5, 0.5)
-  #volumetric.isosurf(ax, counts, level_frac=0.7)
-  cs = kyrt.color_scatter(ax, rvecs[sel], vals[sel], alpha=0.5, zlim=zlim)
-  kyrt.scalar_colorbar(*zlim)
-  #fig.savefig('rs%d-ne%d-g3d.png' % (rs, nevery), dpi=320)
-  ax.set_title('3D g(r)')
-
-  # 2D slice
-  z0 = 0
-  err = 1E-3
-  sel = abs(rvecs[:, 2]-z0) < err
-  kyrt.set_style()
-  
-  fig, ax = plt.subplots(1,2,figsize=(9,4))
-  ax[0].set_title(r'$r_s$=%d, z = %d' % (rs,z0))
-  ax[0].set_xlabel('x/L')
-  ax[0].set_ylabel('y/L')
-
-  vals = counts.ravel()
-  i = np.argmax(vals)
-  print(vals[sel].shape)
-  cs = kyrt.contour_scatter(ax[0], rvecs[sel, :2], vals[sel], zlim=zlim)
-  #divider = make_axes_locatable(ax[0])
-  #cax = divider.append_axes('right',size='5%',pad=0.05)
-  plt.colorbar(cs,ax=ax[0])
-
-
-  #fig.savefig('tb2_n2-rs%d-g2d.png' % rs, dpi=320)
-   
-  from numpy import matlib as mb
-  # 1D cut of g(r) along v1 and v2
-  vec1 = [1,0,0]
-  vec2 = [1,1,1]
-  v1 = vec1/np.linalg.norm(vec1)
-  v2 = vec2/np.linalg.norm(vec2)
-  # pick out points along these two lines by comparing alignment between angles and vectors
-  norms = mb.repmat(np.linalg.norm(rvecs,axis=1),3,1).T
-  r = rvecs/norms
-  r[np.isnan(r)] = 0
-  s1 = np.sum(v1*r,axis=1)
-  s2 = np.sum(v2*r,axis=1)
-  s1[s1>1] = 1; s1[s1<-1] = -1; s2[s2>1] = 1; s2[s2<-1] = -1;
-  thetas1 = np.arccos(s1)
-  thetas2 = np.arccos(s2)
- 
-  sel1 = np.array(abs(thetas1) < 0.005)
-  sel2 = np.array(abs(thetas2) < 0.005)
-  # define x axis (distance along cut)
-  r1 = rvecs[sel1,:]
-  r2 = rvecs[sel2,:]
-  d1 = np.linalg.norm(r1,axis=1)
-  d2 = np.linalg.norm(r2,axis=1)
-  ax[1].plot(d1*lbox,vals[sel1],'o-',label='$r_s=%d$, along [%d,%d,%d]' %(rs,vec1[0],vec1[1],vec1[2]))
-  ax[1].plot(d2*lbox,vals[sel2],'o-',label='$r_s=%d$, along [%d,%d,%d]' %(rs,vec2[0],vec2[1],vec2[2]))
-  ax[1].set_xlabel('r')
-  ax[1].set_ylabel('g(r)')
-  ax[1].set_title('L = %.2f' %lbox)
-  
-  valdict = {'gridvecs':rvecs, 'counts':vals,'L':lbox,'rs':rs,'dist1':d1,'gcut1':vals[sel1],'vec1':vec1,'vec2':vec2,'dist2':d2,'gcut2':vals[sel2]}
-  sio.savemat(os.path.splitext(fh5)[0] + '.mat',valdict)
-  
-  # compare rs=30 with rs = 110 
-  mat = sio.loadmat('/mnt/home/llin1/scratch/E_Nw_tests/rs110_nconfig512_data/DMC_bind_diffusion_0_el1_ph0_rs_110_popsize_512_seed_0_N_15_eta_0.00_l_5.00_nstep_405000_popstep10_tau_2.75.mat')
-  print(sorted(mat.keys()))
-  print(mat['dist1'][0][0])
-  ax[1].plot(mat['L'][0]*mat['dist1'][0],mat['gcut1'][0],'o-',label='$r_s = %d$, along [%d,%d,%d]' %(mat['rs'][0],mat['vec1'][0][0],mat['vec1'][0][1],mat['vec1'][0][2]))
-  ax[1].plot(mat['L'][0]*mat['dist2'][0],mat['gcut2'][0],'o-',label='$r_s = %d$, along [%d,%d,%d]' %(mat['rs'][0],mat['vec2'][0][0],mat['vec2'][0][1],mat['vec2'][0][2]))
-  ax[1].legend()
-
-  fig.tight_layout()
-  #fig.savefig('tb2_n2-rs%d-g2d.png' % rs, dpi=320)
+  fig, ax = plt.subplots(1,1,figsize=(5,4))
+  ns=[50,100,150,200,300]
+  #ns = np.arange(0,wts.shape[1]-1)
+  steps = np.arange(nequil,(wts.shape[0])*nevery,nevery)
+  for n in ns:
+      #print(wts[:,n])
+      ax.plot(steps,wts[:,n].real,label='walker %d' %n)
+  ax.set_xlabel('step')
+  ax.set_ylabel('walker weight')
+  ax.set_xlim([0,10000])
+  ax.set_ylim([0,4])
+  #ax.legend()
   plt.show()
-  ''' 
-  # step 5: calculate S(k)
-  kf = (9*np.pi/4)**(1./3)/rs
-  kcut = 5*kf
-  kvecs, skm, ske = box_sofk(posa, lbox, kcut)
-  skm /= nelec; ske /= nelec
-  kmags = np.linalg.norm(kvecs, axis=-1)
 
-  # data: save S(k)
-  data = np.c_[kmags, skm, ske, kvecs]
-  np.savetxt('rs%d-ne%d-sofk.dat' % (rs, nevery), data)
-
-  # visualize: S(k)
-  fig, ax = plt.subplots()
-  ax.set_xlim(0, 5)
-  ax.set_ylim(0, 1.05*skm.max())
-  ax.set_xlabel('k/kf')
-  ax.set_ylabel('S(k)')
-
-  ax.errorbar(kmags/kf, skm, ske, marker='.', ls='')
-
-  fig.tight_layout()
-  plt.show()
-  '''
 if __name__ == '__main__':
   #main()  # set no global variable
   #fh5 = '/mnt/home/llin1/scratch/E_Nw_tests/rs30_nconfig512_data/DMC_bind_diffusion_0_el1_ph1_rs_30_popsize_512_seed_0_N_15_eta_0.00_l_5.00_nstep_140000_popstep150_tau_0.75.h5' #el+ph, rs=30
@@ -881,11 +1170,17 @@ if __name__ == '__main__':
   #fh5 = '/mnt/home/llin1/scratch/E_Nw_tests/rs110_nconfig512_data/DMC_bind_diffusion_0_el1_ph0_rs_110_popsize_512_seed_0_N_15_eta_0.00_l_5.00_nstep_405000_popstep10_tau_2.75.h5' #rs=110, jellium
   fh5 = '/mnt/home/llin1/scratch/E_Nw_tests/rs110_nconfig512_data/DMC_bind_diffusion_0_el1_ph1_rs_110_popsize_512_seed_0_N_15_eta_0.00_l_5.00_nstep_250000_popstep150_tau_2.75.h5' #rs=110, el+ph
   files = sys.argv[1:]
-  #Plot_3D_gofr(fh5,zlim=[0, 5],cutoff=1)
+  #Plot_3D_gofr(fh5,zlim=[0, 5],cutoff=1.5)
   #Plot_1D_gofr(fh5,err=0.05)
   #Plot_sofk(fh5)
 
+
   # useful functions
-  Plot_2D_gofr(files)
-  #Plot_1D_gofr_avg(files,err=0.05)
+  #Plot_2D_gofr(files)
+  #Plot_1D_gofr_avg(files,err=0.05,save=True)
+  Comp_elph_jell(sys.argv[1])
+  #Calc_g_rthetaphi(files,nbins_theta=8,nbins_phi=8,cutoff=0.2)
   #PlotElecDensities(fh5)
+
+  #PlotWalkerWeights(files[0])
+  #Calc_3D_gofr(files[0], save=False)
