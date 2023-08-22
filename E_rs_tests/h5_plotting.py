@@ -36,6 +36,44 @@ def FitData(xvals, yvals, yerr=[], fit='lin', extrap=[]):
     print(textstr)
     return ans, textstr
 
+def GetPosArr(filename):
+    # returns cumulative (no PBC) position array (Nw x Nelec x Ndim x Nt) and cumulative distance array (between the two electrons) (Nw x Ndim x Nt)
+    f = h5py.File(filename,'r')
+    tau = f.get('meta/tau')[0,0]
+    arrstep = f.get('meta/arrstep')[0,0]
+    Nsteps = f.get('meta/Nsteps')[0,0]
+    Nw = f.get('meta/nconfig')[0,0]
+    Nt=int(Nsteps/arrstep)+1 #will erase 0 cols at end (keys are unsorted so it's easiest to first just shove everything into an array and then cut it down), so no -int(nequil/arrstep)
+    print(Nt)
+    keys = list(f.keys())
+    temp = re.compile("([a-zA-Z]+)([0-9]+)")
+     
+    posarr = np.zeros((Nw,2,3,Nt))
+    ts = np.zeros(Nt)
+    minid = 0
+    for i,test_str in enumerate(keys):
+        try:
+            res = temp.match(test_str).groups()    
+        except AttributeError:
+            # doesn't correspond to a data header entry of "step#"
+            continue
+        if int(res[1]) == 0: 
+            minid = i
+            print('minid',minid)
+        pos = np.array(f.get(test_str+'/pos'))   
+        j=i-minid
+        #print(minid,test_str,j)
+        posarr[:,:,:,j] = pos
+        ts[j] = int(res[1])   
+
+    tidx = np.argsort(ts)
+    posarr = posarr[:,:,:,tidx]
+    distarr = np.sqrt(np.sum((posarr[:,0,:,:]-posarr[:,1,:,:])**2,axis=1)) 
+    ts = ts[tidx]
+    print(posarr.shape)
+    print(distarr.shape)
+    return f,ts,posarr,distarr
+
 def Get_h5_steps(filename,f=None,tequil=None):
     ''' Extract phonon distributions (Nwalkers x Nkpoints) + electron separation distance array (Nwalkers-length vector) from h5py file'''
     # f: h5py file - if None, read in filename
@@ -188,6 +226,6 @@ if __name__ == '__main__':
   #print(list(f.keys()))
   #Get_h5_steps(f)
   #Phonon_Mom_Density_h5(f)
- 
-  Get_h5_steps(filenames[0],f=None,tequil=None)
+  GetPosArr(sys.argv[1])
+  #Get_h5_steps(filenames[0],f=None,tequil=None)
   #Elec_sep_dist(filenames,fit=True,tequil=500)

@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=multi
-#SBATCH -n 20
+#SBATCH -n 100
 #SBATCH --mem-per-cpu 7gb #memory per processor to be used for each task
-#SBATCH -o multi-%A.out #A: job ID, a: task ID
 #SBATCH -p genx,gen,ccq # partition from which slurm will select the requested amt of nodes
+#SBATCH -t 1-23:59:58
 
 cd $SLURM_SUBMIT_DIR
 
@@ -26,11 +26,11 @@ source /etc/profile #commands in the file will be executed as they were executed
 
 #run simulation function
 start=`date +%s.%N`
-joutdir='/mnt/home/llin1/scratch/test'
-paramfile=$joutdir/data_eta_l_params_lin.csv
+joutdir='/mnt/home/llin1/scratch/data_pol_30k'
+paramfile=$joutdir/data_eta_l_params_lin_el1_ph1_coul0.csv
 n=$(wc -l < $paramfile) #find param file length
 echo $n
-ID=data
+ID='dat'
 
 END=$(( $n-1 ))
 
@@ -41,7 +41,7 @@ do
     #echo $start_num
     #echo $end_num
     
-    python -u jobarray.py -outdir $joutdir -startnum $start_num -endnum $end_num -paramfile $paramfile > $joutdir/$ID-$i.out & 
+    python -u jobarray.py --outdir $joutdir --startnum $start_num --endnum $end_num --paramfile $paramfile > $joutdir/$ID-$i.out & 
 done
 
 wait

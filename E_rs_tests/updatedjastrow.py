@@ -39,7 +39,7 @@ class UpdatedJastrow(jastrowspin.JastrowSpin):
         super().__init__(cell,a_basis=abasis, b_basis=bbasis)
         self.parameters["bcoeff"][0, [0, 1, 2]] = gpu.cp.array([-0.25, -0.50, -0.25])
         print(self._nelec)
-        self.accumulator = {"energy": EnergyAccumulator(cell,diffusion)} #energy accumulator, dict object storing energy info
+        self.accumulator = {"energy": EnergyAccumulator(cell)} #energy accumulator, dict object storing energy info
     
     def setup(self, initpos):
         filename = 'opt-rs' + str(self.rs) + '.h5'

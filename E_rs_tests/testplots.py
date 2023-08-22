@@ -176,6 +176,7 @@ def FitData(xvals, yvals, yerr=[], fit='lin', extrap=[],guess=[1,1],varlabs=['E'
 
 def E_timelapse(filenames,gth=False,tequil=None,labels=[]):
     fig,ax = plt.subplots(1,1,figsize=(7,5))
+    print(filenames)
     for i,name in enumerate(filenames):
         df = pd.read_csv(name)
         h = h5py.File(os.path.splitext(name)[0] + '.h5','r')
@@ -202,7 +203,90 @@ def E_timelapse(filenames,gth=False,tequil=None,labels=[]):
     ax.legend() 
     plt.tight_layout()
     plt.show()
-  
+
+def PlotAccRatioHist(filename):
+    df = pd.read_csv(filename)
+    steps = df['step'].values
+    wts = df['weight'].values
+    #acc_ratios = df['acc_ratio'].values
+    #counts, bins = np.histogram(acc_ratios)
+    fig, ax = plt.subplots(1,2)
+    #ax[0].stairs(counts,bins)
+    ax[0].set_ylabel('counts')
+    ax[0].set_xlabel('acc ratio')
+    ax[1].plot(steps,wts)
+    ax[1].set_xlabel('step')
+    ax[1].set_ylabel('weight')
+    plt.show() 
+
+def CalculateCorrelationFxn(filename,tequil):
+    from h5_plotting import GetPosArr  
+    h,ts,posarr,distarr = GetPosArr(filename) #distarr: Nw x Nt
+    r_s = h.get('meta/rs')[0,0]
+    L = h.get('meta/L')[0,0]
+    tau = h.get('meta/tau')[0,0]
+    Nsteps = h.get('meta/Nsteps')[0,0]
+    arrstep = h.get('meta/arrstep')[0,0]
+    print(arrstep)
+    arrts = np.arange(0,posarr.shape[-1])*arrstep
+    #idx = np.where((arrts >= tequil) & (arrts <= 200**2))[0]
+    idx = np.where(arrts >= tequil)[0]
+    posarr = posarr[:,:,:,idx]/L #walkers, elec number, dim, time
+    posarr = posarr - np.rint(posarr) #wrap positions
+    distarr = distarr[:,idx]/L # elec sep dist, in units of the system size L
+    distarr = distarr - np.rint(distarr) #wrap elec dists back inside box
+    dists = np.ravel(distarr)
+    distbins = np.arange(0,1, 0.01)
+    Nt = posarr.shape[-1]
+    Nw = posarr.shape[0] # number of walkers
+    # need: a) distances between particles, b) position coords between particles
+    # a) distarr, b) posarr
+    # correlations: <x . x> = <xixj + yiyj>, normalized to 1
+    corrfnarr = np.sum(posarr[:,0,:,:]*posarr[:,1,:,:],axis=1)
+    corrfnarr = corrfnarr / (np.sqrt(np.sum(posarr[:,0,:,:]**2,axis=1))* np.sqrt(np.sum(posarr[:,1,:,:]**2,axis=1))) # Nw x Nt matrix, same size as distarr
+    corrfn = np.ravel(corrfnarr)
+    Corr = np.full(len(distbins)-1,np.nan)
+    Corr_err = np.full(len(distbins)-1,np.nan)
+    #calculate correlation fxns for individual walkers, then average over them at the end so that not all the walkers fall into the same initial bin
+    for i in range(len(distbins)-1):
+
+        idx = np.where((dists >= distbins[i]) & (dists <= distbins[i+1]))[0]
+        if len(idx) == 0:
+            continue
+        ccrop = corrfn[idx]
+        Corr[i] = np.mean(ccrop)
+        Corr_err[i] = np.std(ccrop)/len(ccrop)
+        
+    bincents = 0.5*(distbins[:-1] + distbins[1:])
+    fig,ax = plt.subplots(1,1,figsize=(6,6))
+    ax.errorbar(bincents,Corr,yerr=Corr_err,label='Avgd over all walkers/times')
+    ax.set_xlabel('$r_{12}$ (units of $L$)',fontsize=16)
+    ax.set_ylabel('$C(r) = <\\hat r_1 \cdot \\hat r_2>_{r_{12}=r}$',fontsize=16)
+    ax.set_title('$r_s = %d, L = %.2f, t_{tot} = %d$' %(r_s,L,int(tau*Nsteps)),fontsize=16)
+    #ax[0].set_ylim(0,1)
+    ax.legend()
+    plt.tight_layout()
+    
+    fig2,ax2 = plt.subplots(1,3,figsize=(9,4.5)) #histogram of positions 0 < x < L
+    modpos = posarr[:,1,:,:] - posarr[:,0,:,:] #elec sep dist
+    modpos = modpos - np.rint(modpos)
+    # elec separation distance coordinates - minimum image convention (map back to [-L/2, L/2]
+    modx = np.ravel(modpos[:,0,:])
+    mody = np.ravel(modpos[:,1,:])
+    modz = np.ravel(modpos[:,2,:])
+    ax2[0].hist(modx,bins=20)
+    ax2[1].hist(mody,bins=20)
+    ax2[2].hist(modz,bins=20)
+    ax2[0].set_xlabel('$x_{12}$ pos')
+    ax2[1].set_xlabel('$y_{12}$ pos')
+    ax2[2].set_xlabel('$z_{12}$ pos')
+    #ax2[0].set_xlim([0,L])
+    #ax2[1].set_xlim([0,L])
+    #ax2[2].set_xlim([-0.01,L])
+    plt.suptitle('L = %.2f' %L)
+    plt.tight_layout()
+    plt.show()    
+
 def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
     from h5_plotting import Get_h5_steps
     # given a folder name, pick out all the different files / seeds corresponding to the largest number of simulation steps
@@ -210,6 +294,9 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
     if len(labels)==0:
         labels = np.full(len(filenames),'',dtype=str)
     fig,ax = plt.subplots(1,1,figsize=(5,7))
+
+    if len(filenames) < 3:
+        avg = False
 
     if avg:
         diff_avg = np.zeros(pd.read_csv(filenames[0])['dists'].values.shape)
@@ -220,7 +307,9 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         dct = 0; ect = 0; jct = 0;
         tavg = np.zeros(diff_avg.shape)
     
+    minlen = 0 # if not all files have the same number of data points, truncate the plotting / fitting array to the shortest length (otherwise the averaging will get messed up)
     for i,name in enumerate(filenames):
+        
         df = pd.read_csv(name)
         h = h5py.File(os.path.splitext(name)[0] + '.h5','r')
         steps = df['step'].values
@@ -231,15 +320,23 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         else:
             print('h5 found')
             _,_,_,_,dists=Get_h5_steps('',f=h)    
+
+
         tau = h.get('meta/tau')[0,0]
         Nw = h.get('meta/nconfig')[0,0]
         Nsteps = h.get('meta/Nsteps')[0,0]
+        L = h.get('meta/L')[0,0]
+        if i==0: minlen = len(dists)
+        else: 
+            if len(dists) < minlen: minlen = len(dists)
         print('nsteps',Nsteps)
+        print('minlen',minlen)
         ph = h.get('meta/ph_bool')[0,0]
         r_s = h.get('meta/rs')[0,0]
         diff = h.get('meta/diffusion')[0,0]
         ts = steps*tau
-        if i==0: tavg = ts
+        if i==0: 
+            tavg = ts
         if tequil is None: tequil = Nsteps*tau/3
         #print(tequil)
         nequil = int(tequil/tau)
@@ -260,7 +357,7 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
                 
                 dct = dct + 1
             if fit==True and avg==False:
-                linfit,txt = FitData(np.sqrt(ts),dists,yerr=d_err,guess=[5,5],varlabs=['r','\sqrt{t}'])
+                linfit,txt = FitData(np.sqrt(ts),dists/L,yerr=d_err/L,guess=[5,5],varlabs=['r','\sqrt{t}'])
                 ax.plot(np.sqrt(ts),linfit,'r-',zorder=10,label='diff fit')
                 ax.text(0.3,0.75, txt, horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
                 print(txt)
@@ -286,13 +383,16 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
                     eph_avg = eph_avg + dists[:len(eph_avg)]
                 ect = ect + 1
             color = 'green'
-        ax.plot(np.sqrt(ts),dists,label=labels[i],color=color)
+        ax.plot(np.sqrt(ts),dists/L,label=labels[i],color=color)
 
     #ax.legend()
     ax.axvline(np.sqrt(tequil),color='g',linestyle='--')
     ax.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
-    ax.set_ylabel('$|\\vec r_{12}|$')
+    ax.set_ylabel('$|\\vec r_{12}|$ (units of L)')
     ax.set_title('$r_s=%d,N_w=%d$' %(r_s,Nw))
+    steps = [5000, 105000, 205000, 305000, 405000]
+    for s in steps:
+        ax.axvline(np.sqrt(s*tau),color='k')
     plt.tight_layout()
     
     if avg:
@@ -306,16 +406,16 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         if jct > 0:
             jell_avg = jell_avg/jct
 
-        ax2.plot(np.sqrt(tavg),diff_avg,color='magenta',label='diff (avg)')
-        ax2.plot(np.sqrt(tavg),jell_avg,color='blue',label='jell (avg)')
-        ax2.plot(np.sqrt(tavg),eph_avg,color='green',label='eph (avg)')
+        ax2.plot(np.sqrt(tavg[:minlen]),diff_avg[:minlen]/L,color='magenta',label='diff (avg)')
+        ax2.plot(np.sqrt(tavg[:minlen]),jell_avg[:minlen]/L,color='blue',label='jell (avg)')
+        ax2.plot(np.sqrt(tavg[:minlen]),eph_avg[:minlen]/L,color='green',label='eph (avg)')
         if fit:
-            linfit,txt = FitData(np.sqrt(tavg),diff_avg,yerr=diff_err_avg,guess=[5,5],varlabs=['r','\sqrt{t}'])
-            ax2.plot(np.sqrt(tavg),linfit,'r-',zorder=10,label='diff fit')
+            linfit,txt = FitData(np.sqrt(tavg[:minlen]),diff_avg[:minlen]/L,yerr=diff_err_avg[:minlen]/L,guess=[5,5],varlabs=['r','\sqrt{t}'])
+            ax2.plot(np.sqrt(tavg[:minlen]),linfit[:minlen],'r-',zorder=10,label='diff fit')
             ax2.text(0.3,0.75, txt, horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes)
         ax2.axvline(np.sqrt(tequil),color='g',linestyle='--')
         ax2.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
-        ax2.set_ylabel('$<|\\vec r_{12}|>$')
+        ax2.set_ylabel('$<|\\vec r_{12}|>$ (units of L)')
         ax2.set_title('$r_s=%d$, $N_w=$%d walkers, %d trials' %(r_s,Nw,max([dct,ect,jct])))
         ax2.legend()
         plt.tight_layout() 
@@ -357,16 +457,22 @@ def PhononMomDensityTimelapse(filenames,k=1):
     plt.show() 
 
 if __name__=="__main__":
-    datadir = sys.argv[1]
-    filenames = FindMostRecentFile(datadir)
+    #datadir = sys.argv[1]
+    #filenames = FindMostRecentFile(datadir)
+    labels = []
     #labels=['$t_{proj}=64,N_w=32$','$t_{proj}=128,N_w=32$']
     #labels=['$N=5$','N=10','N=15','N=20']
     #labels=['popstep=10,$\\tau=.75$','popstep=10,$\\tau=5$','popstep=10,$\\tau=2$','popstep=20,$\\tau=.75$','popstep=2,$\\tau=.75$']
-    labels=['popstep=2,$\\tau=.75$','popstep=20,$\\tau=.75$','popstep=10,$\\tau=.75$']
-    tequil=1800
+    #labels=['popstep=2,$\\tau=.75$','popstep=20,$\\tau=.75$','popstep=10,$\\tau=.75$']
+    tequil=5000 #for rs=110
+    tequil=2000 #for rs=30
     #E_timelapse(filenames,tequil=tequil,labels=labels)
     #E_vs_var(filenames,xvar='1/nconfig',comp=True)
-    Elec_sep_dist(filenames,fit=True,tequil=tequil,avg=True)
+
+    E_timelapse(sys.argv[1:],tequil=1500)
+    #PlotAccRatioHist(sys.argv[1])
+
+    #Elec_sep_dist([sys.argv[1]],fit=True,tequil=tequil,avg=False)
     #JelliumComp()
     #PhononMomDensityTimelapse(filenames,k=1)
-    
+    #CalculateCorrelationFxn(sys.argv[1],tequil)

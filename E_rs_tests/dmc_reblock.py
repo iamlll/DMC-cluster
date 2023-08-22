@@ -3,7 +3,7 @@ import numpy as np
 import sys
 import os
 import h5py
-import qharv.reel.scalar_dat as qharv
+import qharv.reel.scalar_dat as qhv
 
 def reblock(eloc,warmup,nblocks):
     elocblock=np.array_split(eloc[warmup:],nblocks) #throw out "warmup" number of equilibration steps and split resulting local energy array into nblocks subarrays
@@ -36,7 +36,7 @@ def ReblockEnergies(filenames,tequil=100,blocksize=1):
             alpha = (1-eta)*ll
         eloc=df.sort_values('step')['elocal'].apply(lambda x:complex(x)).values  #mixed estimator
         egth=df.sort_values('step')['egth'].apply(lambda x:complex(x)).values #growth estimator
-        autocor = qharv.corr(eloc)
+        autocor = qhv.corr(eloc)
         blocksize = max(blocksize,np.ceil(autocor))
         print(blocksize)
         blocktau=blocksize # max(blocksize/tau,blocksize)
@@ -66,15 +66,34 @@ def ReblockEnergies(filenames,tequil=100,blocksize=1):
         })
 
     dirname = os.path.dirname(filenames[0]) # take directory of 1st file as output dir
-    print(dfreblock)
     pd.DataFrame(dfreblock).to_csv(os.path.join(dirname,"reblocked_eta%.2f_l%.2f_tequil%d.csv" %(eta,ll,tequil)))
     return dfreblock
+
+def CalcBindingEnergy(files):
+    filename = files[0]
+    df=pd.read_csv(filename)
+    df_ph = df[(df['diffusion'] == 0) & (df['ph_bool'] == 1)]
+    #df_jell = df[(df['diffusion'] == 0) & (df['ph_bool'] == 0)]
+    df_jell = df[(df['diffusion'] == 1) & (df['ph_bool'] == 1)] #no coulomb with phonons to imitate 2 indep polarons in box
+    E_ph = df_ph['eavg'].mean()
+    E_jell = df_jell['eavg'].mean()
+    print(df_ph.head())
+    print(df_jell.head())
+    print('energies (ha)',E_ph, E_jell, E_ph-E_jell)
+    eta = df['eta'].values[0]
+    l = df['l'].values[0]
+    alpha = (1-eta)*l
+    print(eta,l,alpha)
+    # alpha hw --> alpha/(2l^2) in hartrees
+    # https://faculty.kfupm.edu.sa/phys/aanaqvi/rydberg.pdf
+    pred = -alpha/(2*l**2)
+    print('predicted GS energy in ha (weak, strong):',2*pred,2*pred*alpha/(3*np.pi))
 
 if __name__ == '__main__':
     #allow multiple input files and concatenate results in same output file
     filenames = sys.argv[1:]
-    print(filenames)
     #warmup=1000
     # equilibration time = timestep * (# steps thrown out)
-    tequil = 200 
-    ReblockEnergies(filenames,tequil)
+    tequil = 1500 
+    #ReblockEnergies(filenames,tequil)
+    CalcBindingEnergy(filenames) #read in reblocked csv 

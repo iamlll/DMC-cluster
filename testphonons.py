@@ -334,6 +334,7 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
     elocold = mixed_estimator(ke_coul, pos, wf, configs, rho, g, h_ks, f_ks, kcopy,phonon)
 
     eref = np.mean(elocold)
+    #eref = -1250 #use for small eta & l combos
     print(eref)
 
     if resume:
@@ -423,23 +424,6 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         if istep % 5000 == 0:
             print(istep)
 
-        ''' 
-        if istep % savestep == 0 or istep == nstep-1:
-            print(
-                "iteration",
-                istep,
-                "avg wt",
-                wavg.real,
-                "ke_coul",
-                np.mean(ke_coul),
-                "average energy",
-                np.mean(eloc * weight / wavg),
-                "eref",
-                eref,
-                "sig_gth",
-                np.std(eloc),
-            )
-        '''
         if istep % savestep == 0:
             dists = np.sqrt(np.sum((pos[:,0,:]-pos[:,1,:])**2,axis=1))
             avgdists = np.mean(dists) #average over walkers
@@ -596,7 +580,7 @@ if __name__ == "__main__":
     parser.add_argument('--arrstep',type=int,default=50) # how frequently to save phonon info + interparticle distances
     parser.add_argument('--popstep',type=int,default=200) # how frequently to branch --> comb through existing walkers
     parser.add_argument('--savestep',type=int,default=5) # how frequently to save energy information
-    parser.add_argument('--l',type=int,default=l) #plays the role of the electron coupling strength U 
+    parser.add_argument('--l',type=np.float64,default=l) #plays the role of the electron coupling strength U 
     parser.add_argument('--eta',type=np.float64,default=eta_STO) 
     parser.add_argument('--gth',type=int,default=1) #on/off switch for growth estimator
     parser.add_argument('--outdir',type=str,default='data') 
@@ -656,7 +640,7 @@ if __name__ == "__main__":
     # if want to resume from a previous file, find said file first. If file not found, start sim from scratch
     resume = args.resume > 0
     if resume:
-        filename = 'DMC_%s_diffusion_%d_el%d_ph%d_rs_%d_popsize_%d_seed_%d_N_%d_eta_%.2f_l_%.2f_nstep_[0-9]*_popstep%d_tau_%s.h5' %(init,int(diffusion),int(elec_bool), int(ph_bool), r_s,nconfig, seed, N, eta, l,popstep,str(tau))
+        filename = 'DMC_%s_diffusion_%d_el%d_ph%d_rs_%d_popsize_%d_seed_%d_N_%d_eta_%.3f_l_%.2f_nstep_[0-9]*_popstep%d_arrstep%d_tau_%s.h5' %(init,int(diffusion),int(elec_bool), int(ph_bool), r_s,nconfig, seed, N, eta, l,popstep,arrstep,str(tau))
         results = [x for x in os.listdir(datadir) if re.match(filename,x) and os.path.exists(os.path.join(datadir,os.path.splitext(x)[0]+'.csv'))]
         print(results)
         if len(results) == 0:
@@ -679,8 +663,10 @@ if __name__ == "__main__":
 
     if len(resumefile) == 0:
         pos = InitPos(wf,init,d=1) 
+    
+    print('resume file',resumefile)
 
-    filename = "DMC_{9}_diffusion_{10}_el{8}_ph{7}_rs_{0}_popsize_{1}_seed_{2}_N_{3}_eta_{4:.2f}_l_{5:.2f}_nstep_{6}_popstep{11}_arrstep{12}".format(r_s, nconfig, seed, N,eta,l,Nstep,int(ph_bool),int(elec_bool),init,int(diffusion),popstep,arrstep)
+    filename = "DMC_{9}_diffusion{10}_el{8}_ph{7}_rs_{0}_popsize_{1}_seed_{2}_N_{3}_eta_{4:.3f}_l_{5:.2f}_nstep_{6}_popstep{11}_arrstep{12}".format(r_s, nconfig, seed, N,eta,l,Nstep,int(ph_bool),int(elec_bool),init,int(diffusion),popstep,arrstep)
     print(filename)
     print('elec',elec_bool)
     print('ph',ph_bool)
