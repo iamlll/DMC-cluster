@@ -36,11 +36,50 @@ def FitData(xvals, yvals, yerr=[], fit='lin', extrap=[]):
     print(textstr)
     return ans, textstr
 
-def Get_h5_steps(filename,tequil=None):
-    ''' Extract phonon distributions (Nwalkers x Nkpoints) + electron separation distance array (Nwalkers-length vector) from h5py file'''
-
+def GetPosArr(filename):
+    # returns cumulative (no PBC) position array (Nw x Nelec x Ndim x Nt) and cumulative distance array (between the two electrons) (Nw x Ndim x Nt)
     f = h5py.File(filename,'r')
-   
+    tau = f.get('meta/tau')[0,0]
+    arrstep = f.get('meta/arrstep')[0,0]
+    Nsteps = f.get('meta/Nsteps')[0,0]
+    Nw = f.get('meta/nconfig')[0,0]
+    Nt=int(Nsteps/arrstep)+1 #will erase 0 cols at end (keys are unsorted so it's easiest to first just shove everything into an array and then cut it down), so no -int(nequil/arrstep)
+    print(Nt)
+    keys = list(f.keys())
+    temp = re.compile("([a-zA-Z]+)([0-9]+)")
+     
+    posarr = np.zeros((Nw,2,3,Nt))
+    ts = np.zeros(Nt)
+    minid = 0
+    for i,test_str in enumerate(keys):
+        try:
+            res = temp.match(test_str).groups()    
+        except AttributeError:
+            # doesn't correspond to a data header entry of "step#"
+            continue
+        if int(res[1]) == 0: 
+            minid = i
+            print('minid',minid)
+        pos = np.array(f.get(test_str+'/pos'))   
+        j=i-minid
+        #print(minid,test_str,j)
+        posarr[:,:,:,j] = pos
+        ts[j] = int(res[1])   
+
+    tidx = np.argsort(ts)
+    posarr = posarr[:,:,:,tidx]
+    distarr = np.sqrt(np.sum((posarr[:,0,:,:]-posarr[:,1,:,:])**2,axis=1)) 
+    ts = ts[tidx]
+    print(posarr.shape)
+    print(distarr.shape)
+    return f,ts,posarr,distarr
+
+def Get_h5_steps(filename,f=None,tequil=None):
+    ''' Extract phonon distributions (Nwalkers x Nkpoints) + electron separation distance array (Nwalkers-length vector) from h5py file'''
+    # f: h5py file - if None, read in filename
+    if f is None:
+        f = h5py.File(filename,'r')
+    
     tau = f.get('meta/tau')[0,0]
     arrstep = f.get('meta/arrstep')[0,0]
     Nsteps = f.get('meta/Nsteps')[0,0]
@@ -68,6 +107,9 @@ def Get_h5_steps(filename,tequil=None):
         # now want to sort through these in order, loop through them and extract each set of f_k and n_k (also distances r), then concatenate them to make a giant array
         f_ks = np.array(f.get(test_str + '/f_ks'))
         n_ks = np.array(f.get(test_str+'/n_ks'))
+       
+
+ 
         # if f_ks is 2D (Nkpts x Nwalkers), average over all walkers at each k-point and find the SD
         if len(f_ks.shape) > 1:
             f_ks = f_ks.mean(axis=1)
@@ -160,7 +202,7 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False):
             if fit:
                 minid = np.argmin(np.abs(ts-tequil)) #find point closest to equilibration time
                                
-                linfit,txt = FitData(np.sqrt(ts[minid:]),avgdists[minid:],yerr=d_err[minid:])    
+                linfit,txt = FitData(np.sqrt(ts),avgdists,yerr=d_err)    
                 ax.plot(np.sqrt(ts[minid:]),linfit,'r-',zorder=10,label='diff fit')
                 ax.text(0.75, 0.2, txt, horizontalalignment='center', verticalalignment='center', transform=ax.transAxes)
                 print(txt)
@@ -184,5 +226,6 @@ if __name__ == '__main__':
   #print(list(f.keys()))
   #Get_h5_steps(f)
   #Phonon_Mom_Density_h5(f)
- 
-  Elec_sep_dist(filenames,fit=True,tequil=500)
+  GetPosArr(sys.argv[1])
+  #Get_h5_steps(filenames[0],f=None,tequil=None)
+  #Elec_sep_dist(filenames,fit=True,tequil=500)
