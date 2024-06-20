@@ -1,1 +1,1 @@
-../E_rs_tests/testphonons.py
+../testphonons.py
