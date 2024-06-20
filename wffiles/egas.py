@@ -20,7 +20,8 @@ class EnergyAccumulator:
         ee, ei, ii = self.coulomb.energy(configs)
         ei.fill(0)
         ii = 0
-        #ee.fill(0) #set coulomb energy = 0 (pure diffusion)
+        if wf.diffusion == True:
+            ee.fill(0) #set coulomb energy = 0 (pure diffusion)
         ecp_val = np.zeros(len(configs.configs))
         ke, grad2 = energy.kinetic(configs, wf)
         ke = ke

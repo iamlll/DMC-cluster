@@ -13,6 +13,7 @@ def main():
   from argparse import ArgumentParser
   parser = ArgumentParser()
   parser.add_argument('--rs', type=float, default=4)
+  parser.add_argument('--diffusion', type=bool,default=False)
   parser.add_argument('--dt', type=float)
   parser.add_argument('--nconf', type=int, default=512)
   parser.add_argument('--verbose', action='store_true')
@@ -20,6 +21,7 @@ def main():
   
   args = parser.parse_args()
   outdir = args.outdir
+  diffusion = args.diffusion
   rs = args.rs  # inter-electron spacing, controls density
   nelec = 2
   ndim = 3
@@ -39,6 +41,7 @@ def main():
   # initialize electrons uniformly inside the box
   configs = PeriodicConfigs(pos, axes)
   # use hacked energy in gradient estimator
+  wf.diffusion = diffusion
   acc = EnergyAccumulator(cell)
   pgacc = PGradTransform(
     acc,
