@@ -35,9 +35,16 @@ def ReblockEnergies(filenames,tequil=100,blocksize=1):
             alpha = hfile.get('meta/alpha')[0,0]
         else:
             alpha = (1-eta)*ll
+        print(df.columns)
+        if 'ke' in df.columns:
+            ke = df.sort_values('step')['ke'].apply(lambda x:complex(x)).values #growth estimator
+            coul = df.sort_values('step')['coul'].apply(lambda x:complex(x)).values #growth estimator
+            kebool = True
+        else:
+            ke_coul = df.sort_values('step')['ke_coul'].apply(lambda x:complex(x)).values #growth estimator
+            kebool = False
         eloc=df.sort_values('step')['elocal'].apply(lambda x:complex(x)).values  #mixed estimator
         #egth=df.sort_values('step')['egth'].apply(lambda x:complex(x)).values #growth estimator
-        ke_coul = df.sort_values('step')['ke_coul'].apply(lambda x:complex(x)).values #growth estimator
         elph1 = df.sort_values('step')['H_eph1'].apply(lambda x:complex(x)).values #growth estimator
         elph2 = df.sort_values('step')['H_eph2'].apply(lambda x:complex(x)).values #growth estimator
         eph = df.sort_values('step')['H_ph'].apply(lambda x:complex(x)).values #growth estimator
@@ -48,12 +55,10 @@ def ReblockEnergies(filenames,tequil=100,blocksize=1):
         nblocks=int((len(eloc)-nequil)/blocktau)
         avg,err=reblock(eloc,nequil,nblocks)
         #avg_gth,err_gth=reblock(egth,nequil,nblocks)
-        avg_kc,err_kc=reblock(ke_coul,nequil,nblocks)
         avg1,err1=reblock(elph1,nequil,nblocks)
         avg2,err2=reblock(elph2,nequil,nblocks)
         avg_ph,err_ph=reblock(eph,nequil,nblocks)
-        print(tau,nblocks)
-        dfreblock.append({ 
+        dictionary = {
             #'seed': seed,
             'diffusion':diffusion,
             'elec_bool':elec,
@@ -61,7 +66,7 @@ def ReblockEnergies(filenames,tequil=100,blocksize=1):
             'n_equil': nequil,
             't_equil': tequil,
             'eta':eta,
-            'l':ll, 
+            'l':ll,
             'alpha': alpha,
             'r_s':r_s,
             'tau':tau,
@@ -70,16 +75,26 @@ def ReblockEnergies(filenames,tequil=100,blocksize=1):
             'tproj':hfile.get('meta/tproj')[0,0],
             'eavg':avg, #in hartrees, I believe
             'err':err,
-            'ke_coul':avg_kc,
             'elph1': avg1,
             'elph2': avg2,
             'eph': avg_ph,
             #'egth':avg_gth,
             #'err_gth':err_gth,
             'blocksize': blocksize
-        })
+        }
+        if kebool == True:
+            avg_coul,err_c=reblock(coul,nequil,nblocks)
+            avg_ke,err_k=reblock(ke,nequil,nblocks)
+            dictionary['ke'] = avg_ke
+            dictionary['coul'] = avg_coul
+        else:
+            avg_kecoul,err_k=reblock(ke_coul,nequil,nblocks)
+            dictionary['ke_coul'] = avg_kecoul 
+        print(tau,nblocks)
+        dfreblock.append(dictionary)
+
     dfreblock = pd.DataFrame(dfreblock)
-    print('mean: %.4f, sd: %.4f' %(dfreblock['eavg'].mean(), dfreblock['eavg'].std()))
+    print('mean: %.4f, sd: %.4f' %(dfreblock['eavg'].values, dfreblock['err'].values))
     dirname = os.path.dirname(filenames[0]) # take directory of 1st file as output dir
     savename = os.path.join(dirname,"reblocked_eta%.2f_l%.2f_tequil%d.csv" %(eta,ll,tequil))
     print(savename)
@@ -111,6 +126,6 @@ if __name__ == '__main__':
     filenames = sys.argv[1:]
     #warmup=1000
     # equilibration time = timestep * (# steps thrown out)
-    tequil = 50 
+    tequil = 4000 
     ReblockEnergies(filenames,tequil)
     #CalcBindingEnergy(filenames) #read in reblocked csv 

@@ -174,18 +174,34 @@ def FitData(xvals, yvals, yerr=[], fit='lin', extrap=[],guess=[1,1],varlabs=['E'
     print(textstr)
     return ans, textstr
 
-def E_timelapse(filenames,gth=False,tequil=None,labels=[]):
+def E_timelapse(filenames,gth=False,tequil=None,labels=[],sqrtt=False):
     fig,ax = plt.subplots(1,1,figsize=(7,5))
     print(filenames)
     for i,name in enumerate(filenames):
         df = pd.read_csv(name)
         h = h5py.File(os.path.splitext(name)[0] + '.h5','r')
         steps = df['step'].values
+        tau = h.get('meta/tau')[0,0]
+        ts = steps*tau
+        tlab = 'sim time'
+        if sqrtt == True:
+            ts = np.sqrt(ts)
+            tlab = 'sim time$^{1/2}$'    
    
         Eloc = df['elocal'].values
         Eloc= np.array([complex(val) for val in Eloc])
-        ke_coul = df['ke_coul'].values
-        ke_coul= np.array([complex(val) for val in ke_coul])
+        if 'ke' in df.columns:
+            ke = df['ke'].values
+            ke = np.array([complex(val) for val in ke])
+            coul = df['coul'].values
+            coul = np.array([complex(val) for val in coul])
+            ax.plot(ts,ke.real,label='KE')
+            ax.plot(ts,coul.real,label='coul')
+        else:
+            kec = df['ke_coul'].values
+            kec = np.array([complex(val) for val in kec])
+            ax.plot(ts,kec.real,label='KE + coul')
+            
         eph1 = df['H_eph1'].values
         eph1= np.array([complex(val) for val in eph1])
         eph2 = df['H_eph2'].values
@@ -193,13 +209,10 @@ def E_timelapse(filenames,gth=False,tequil=None,labels=[]):
         ph = df['H_ph'].values
         ph = np.array([complex(val) for val in ph])
 
-        tau = h.get('meta/tau')[0,0]
-        ts = steps*tau
         if len(labels)!=0:
             ax.plot(ts,Eloc.real,label=labels[i]) 
         else:    
             ax.plot(ts,Eloc.real,label='$E_{mix}$') 
-        ax.plot(ts,ke_coul.real,label='KE+coul')
         ax.plot(ts,eph1.real,label='elph1')
         ax.plot(ts,eph2.real,label='elph2')
         ax.plot(ts,ph.real,label='ph')
@@ -208,7 +221,7 @@ def E_timelapse(filenames,gth=False,tequil=None,labels=[]):
         if tequil is None:
             tequil = h.get('meta/Nsteps')[0,0]/3
         ax.axvline(tequil,color='green',linestyle='dotted')
-        ax.set_xlabel('sim time')
+        ax.set_xlabel(tlab)
         ax.set_ylabel('E (ha)')
         if h.get('meta/ph_bool')[0,0] == 0:
             jell=True
@@ -301,13 +314,94 @@ def CalculateCorrelationFxn(filename,tequil):
     plt.tight_layout()
     plt.show()    
 
+def Elec_positions(filenames,tequil=None):
+    from grscript import extract_walkers
+    # given a folder name, pick out all the different files / seeds corresponding to the largest number of simulation steps
+     
+    for i,name in enumerate(filenames):
+        h = h5py.File(os.path.splitext(name)[0] + '.h5','r')
+
+        #print(h['meta'])
+        tau = h.get('meta/tau')[0,0]
+        print('tau',tau)
+        Nw = h.get('meta/nconfig')[0,0]
+        print('num walkers',Nw)
+        Nsteps = h.get('meta/Nsteps')[0,0]
+        L = h.get('meta/L')[0,0]
+        print('done collecting variables')
+
+        # extract unwrapped positions
+        steps, posa, _ = extract_walkers(h, nevery=1,nequil=0,opt=False)
+        #steps, posa, _,_,ancestry = extract_walkers(h, nevery=1,nequil=0,opt=True)
+        print(posa.shape)
+        sortid = np.argsort(steps)
+        posa = posa[sortid,:,:,:] #Nt x Nw x Nelec x Ndim
+
+        # now extract wrapped positions
+        #posnorm = posa / L
+        #posnorm = posa.copy()
+        #posnorm[posa < 0] = posnorm[posa < 0]
+        
+        #xyz = (walkers[:, 0] - walkers[:, 1])/lbox
+        #xyz = xyz - np.rint(xyz)
+        #frames.append(lbox*xyz)
+        
+        # ancestry gives history of each walker. Nt x Nw
+        #f2,a2 = plt.subplots(layout='constrained')
+        #a2.plot(ts,ancestry[:,n]) 
+        #bins = np.arange(512)-0.5
+        #a2.hist(ancestry[:,n],bins=bins,density=True)
+        #a2.set_xlabel('ancestor ID')
+        #a2.set_ylabel('pdf')
+        #plt.show()
+
+        nconf, nwalker, nelec, ndim = posa.shape
+
+        # plot trajectories for walkers 1-10
+        fig,ax = plt.subplots(layout='constrained')
+        n = 2
+        wx0 = posa[:,n,0,:]/L #Nt x 3, walker 0
+        wx1 = posa[:,n,1,:]/L #Nt x 3, walker 0
+        #wx0 = np.mean(posa[:,:,0,:],axis=1)/L #average over all walkers
+        #wx1 = np.mean(posa[:,:,1,:],axis=1)/L #average over all walkers
+        ts = steps[sortid]*tau
+        ts = np.sqrt(ts)
+        ax.set_xlabel('$t^{1/2}$')
+        #ax.set_xlabel('steps')
+        ax.plot(ts,wx0[:,0],label='x0')
+        ax.plot(ts,wx0[:,1],label='y0')
+        ax.plot(ts,wx0[:,2],label='z0')
+        ax.plot(ts,wx1[:,0],label='x1')
+        ax.plot(ts,wx1[:,1],label='y1')
+        ax.plot(ts,wx1[:,2],label='z1')
+        ax.set_ylabel('coordinate')
+        ax.legend()
+
+        f = plt.figure(layout='constrained')
+        a = f.add_subplot(111,projection='3d')
+        # plot trajectories in 3d
+        a.plot(wx0[:,0],wx0[:,1],wx0[:,2],label='0')
+        a.plot(wx1[:,0],wx1[:,1],wx1[:,2],label='1')
+        a.plot(wx0[0,0],wx0[0,1],wx0[0,2],'k*')
+        a.plot(wx1[0,0],wx1[0,1],wx1[0,2],'k*')
+        # plot initial positions in 3d
+        #nt = 50
+        #print(posa[nt,:,0,0]/L,posa[nt,:,0,1]/L,posa[nt,:,0,2]/L)
+        #print(posa[nt,:,1,0]/L,posa[nt,:,1,1]/L,posa[nt,:,1,2]/L)
+        #a.plot(posa[nt,:,0,0]/L,posa[nt,:,0,1]/L,posa[nt,:,0,2]/L,'.',label='e0')
+        #a.plot(posa[nt,:,1,0]/L,posa[nt,:,1,1]/L,posa[nt,:,1,2]/L,'.',label='e1')
+        #a.legend()
+
+    plt.show()
+
 def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
     from h5_plotting import Get_h5_steps
+    from grscript import calc_dists_in_box
     # given a folder name, pick out all the different files / seeds corresponding to the largest number of simulation steps
      
     if len(labels)==0:
         labels = np.full(len(filenames),'',dtype=str)
-    fig,ax = plt.subplots(1,1,figsize=(5,7))
+    fig,ax = plt.subplots(1,1,layout='constrained')
 
     if len(filenames) < 3:
         avg = False
@@ -321,7 +415,7 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         dct = 0; ect = 0; jct = 0;
         tavg = np.zeros(diff_avg.shape)
     
-    minlen = 0 # if not all files have the same number of data points, truncate the plotting / fitting array to the shortest length (otherwise the averaging will get messed up)
+    #minlen = 0 # if not all files have the same number of data points, truncate the plotting / fitting array to the shortest length (otherwise the averaging will get messed up)
     for i,name in enumerate(filenames):
         
         df = pd.read_csv(name)
@@ -335,16 +429,25 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
             print('h5 found')
             _,_,_,_,dists=Get_h5_steps('',f=h)    
 
-
+        #print(h['meta'])
         tau = h.get('meta/tau')[0,0]
+        print('tau',tau)
         Nw = h.get('meta/nconfig')[0,0]
+        print('num walkers',Nw)
         Nsteps = h.get('meta/Nsteps')[0,0]
         L = h.get('meta/L')[0,0]
-        if i==0: minlen = len(dists)
-        else: 
-            if len(dists) < minlen: minlen = len(dists)
+        print('done collecting variables')
+        # in addition to computing the unbound distances, also compute the in-the-box distances to get a sense for how far the electrons actually feel like they are apart
+        # consider: whereas the unbound distances for each sim are not constrained to ever be bounded, we expect that each trajectory for the distance within the box will saturate (presumably? Not sure for jellium)
+        steps_box,dists_box = calc_dists_in_box(h,nevery=1,nequil=0)
+        ts_box = steps_box*tau
+        dbox_err = np.std(dists_box,axis=1)/dists_box.shape[-1] # standard error of walker distn
+        dbox_avg = np.mean(dists_box,axis=1) #average over walkers
+
+        if i == 0: mint = max(steps)
+        else:
+            if max(steps) < mint: mint = max(steps)
         print('nsteps',Nsteps)
-        print('minlen',minlen)
         ph = h.get('meta/ph_bool')[0,0]
         r_s = h.get('meta/rs')[0,0]
         diff = h.get('meta/diffusion')[0,0]
@@ -355,7 +458,7 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         #print(tequil)
         nequil = int(tequil/tau)
         #print(tau)
-        if diff == 1:
+        if diff == 1: #diffusion (jellium, no Coulomb)
             labels[i] = 'diffusion'
             color='magenta'
             if avg:
@@ -397,21 +500,29 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
                     eph_avg = eph_avg + dists[:len(eph_avg)]
                 ect = ect + 1
             color = 'green'
-        ax.plot(np.sqrt(ts),dists/L,label=labels[i],color=color)
-
-    #ax.legend()
-    ax.axvline(np.sqrt(tequil),color='g',linestyle='--')
+        #ax.plot(ts,dists/L,label=labels[i],color=color)
+        print(labels[i])
+        line = ax.plot(np.sqrt(ts),dists/L,label='unbound',color=color)
+        ax.fill_between(np.sqrt(ts),(dists+d_err)/L,(dists-d_err)/L,color=line[0].get_color(),alpha=0.4)
+        linebox = ax.plot(np.sqrt(ts_box),dbox_avg/L,label='bound')
+        ax.fill_between(np.sqrt(ts_box),(dbox_avg+dbox_err)/L,(dbox_avg-dbox_err)/L,color=linebox[0].get_color(),alpha=0.4)
+        
+    ax.legend()
+    #ax.axvline(np.sqrt(tequil),color='g',linestyle='--')
+    #ax.set_xlabel('sim time')
     ax.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
     ax.set_ylabel('$|\\vec r_{12}|$ (units of L)')
     ax.set_title('$r_s=%d,N_w=%d$' %(r_s,Nw))
+    '''
     steps = [5000, 105000, 205000, 305000, 405000]
     for s in steps:
         ax.axvline(np.sqrt(s*tau),color='k')
-    plt.tight_layout()
+    '''
+    #plt.tight_layout()
     
     if avg:
         print(dct,jct,ect)
-        fig2,ax2 = plt.subplots(1,1,figsize=(5,7))
+        fig2,ax2 = plt.subplots(1,1,layout='constrained')
         if dct > 0:
             diff_avg = diff_avg/dct
             diff_err_avg = np.sqrt(diff_err_avg)/dct
@@ -420,19 +531,20 @@ def Elec_sep_dist(filenames,tequil=None,labels=[],fit=False,avg=False):
         if jct > 0:
             jell_avg = jell_avg/jct
 
-        ax2.plot(np.sqrt(tavg[:minlen]),diff_avg[:minlen]/L,color='magenta',label='diff (avg)')
-        ax2.plot(np.sqrt(tavg[:minlen]),jell_avg[:minlen]/L,color='blue',label='jell (avg)')
-        ax2.plot(np.sqrt(tavg[:minlen]),eph_avg[:minlen]/L,color='green',label='eph (avg)')
+        tma = steps <= mint
+        ax2.plot(np.sqrt(tavg[tma]),diff_avg[tma]/L,color='magenta',label='diff (avg)')
+        ax2.plot(np.sqrt(tavg[tma]),jell_avg[tma]/L,color='blue',label='jell (avg)')
+        ax2.plot(np.sqrt(tavg[tma]),eph_avg[tma]/L,color='green',label='eph (avg)')
         if fit:
-            linfit,txt = FitData(np.sqrt(tavg[:minlen]),diff_avg[:minlen]/L,yerr=diff_err_avg[:minlen]/L,guess=[5,5],varlabs=['r','\sqrt{t}'])
-            ax2.plot(np.sqrt(tavg[:minlen]),linfit[:minlen],'r-',zorder=10,label='diff fit')
+            linfit,txt = FitData(np.sqrt(tavg[tma]),diff_avg[tma]/L,yerr=diff_err_avg[tma]/L,guess=[5,5],varlabs=['r','\sqrt{t}'])
+            ax2.plot(np.sqrt(tavg[tma]),linfit[tma],'r-',zorder=10,label='diff fit')
             ax2.text(0.3,0.75, txt, horizontalalignment='center', verticalalignment='center', transform=ax2.transAxes)
         ax2.axvline(np.sqrt(tequil),color='g',linestyle='--')
         ax2.set_xlabel('$\sqrt{t}$ (sim time$^{1/2}$)')
         ax2.set_ylabel('$<|\\vec r_{12}|>$ (units of L)')
         ax2.set_title('$r_s=%d$, $N_w=$%d walkers, %d trials' %(r_s,Nw,max([dct,ect,jct])))
         ax2.legend()
-        plt.tight_layout() 
+        #plt.tight_layout() 
     plt.show()
 
 def PhononMomDensityTimelapse(filenames,k=1):
@@ -478,15 +590,15 @@ if __name__=="__main__":
     #labels=['$N=5$','N=10','N=15','N=20']
     #labels=['popstep=10,$\\tau=.75$','popstep=10,$\\tau=5$','popstep=10,$\\tau=2$','popstep=20,$\\tau=.75$','popstep=2,$\\tau=.75$']
     #labels=['popstep=2,$\\tau=.75$','popstep=20,$\\tau=.75$','popstep=10,$\\tau=.75$']
-    tequil=5000 #for rs=110
-    tequil=2000 #for rs=30
-    #E_timelapse(filenames,tequil=tequil,labels=labels)
+    #tequil=5000 #for rs=110
+    tequil=0 #for rs=30
     #E_vs_var(filenames,xvar='1/nconfig',comp=True)
 
-    E_timelapse(sys.argv[1:],tequil=4000)
+    #E_timelapse(sys.argv[1:],tequil=0,sqrtt=True)
     #PlotAccRatioHist(sys.argv[1])
 
-    #Elec_sep_dist([sys.argv[1]],fit=True,tequil=tequil,avg=False)
+    #Elec_sep_dist(sys.argv[1:],fit=False,tequil=tequil,avg=False)
+    Elec_positions(sys.argv[1:],tequil=None)
     #JelliumComp()
     #PhononMomDensityTimelapse(filenames,k=1)
     #CalculateCorrelationFxn(sys.argv[1],tequil)
