@@ -159,17 +159,20 @@ def acceptance(posold, posnew, driftold, driftnew, tau, wf):
     ratio = wf.val(posnew) ** 2 / wf.val(posold) ** 2
     return np.minimum(1,ratio * gfratio)
 
-def popcontrol(pos, weight, f_ks, wavg, wtot):
-    # keep track of ancestry (which walker numbers of the previous timestep led to the walkers in the current time step)
-    probability = np.cumsum(weight / wtot)
-    randnums = np.random.random(nconfig)
-    # determine which walkers get duplicated / killed
-    new_indices = np.searchsorted(probability, randnums) #indices at which new walkers should get inserted, i.e. indices of old walkers with probability closest to new ones?
-    
-    posnew = pos[new_indices, :, :]
-    newf_ks = f_ks[:,new_indices]
-    weight.fill(wavg)
-    return posnew, newf_ks, weight, new_indices
+def popcontrol(configs, pos, weights, f_ks):
+    nconfig = pos.shape[0]
+    probability = np.cumsum(weights)
+    wtot = probability[-1]
+    base = np.random.rand()
+    comb = (base + np.linspace(0, wtot, nconfig, endpoint=False))
+    newinds = np.searchsorted(
+        probability, comb % wtot
+    )
+    configs.resample(newinds)
+    weights.fill(wtot / nconfig)
+
+    newf_ks = f_ks[:, newinds]
+    return pos[newinds:], newf_ks, weights, newinds
 
 def plotamps(kcopy, n_ks, N):
     # f_ks: (# ks) x (nconfig) array of coherent state amplitudes. Want to make histogram of f_ks vs |k| for final config of f_ks.
@@ -410,7 +413,7 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         wavg = wtot / nconfig
         if elec == True:
             if istep % popstep == 0:
-                pos, f_ks,weight, ancestor_indices = popcontrol(pos, weight, f_ks,wavg, wtot)
+                pos, f_ks,weight, ancestor_indices = popcontrol(configs, pos, weight, f_ks)
                 wf.update(configs,pos)
         tock = time()
         timers['branch'] += tock - tick
