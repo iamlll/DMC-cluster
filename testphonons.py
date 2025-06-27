@@ -9,12 +9,13 @@ import numpy as np
 import os
 import sys
 #sys.path.append("../")
-from metropolis import metropolis_sample
+#from metropolis import metropolis_sample
 import pandas as pd
 import matplotlib.pyplot as plt
 from qharv.reel import config_h5
 from updatedjastrow import UpdatedJastrow, GetEnergy
 import h5py
+import glob
 
 #define various constants
 elec = 1.602E-19*2997924580 #convert C to statC
@@ -59,10 +60,10 @@ def gth_estimator(ke_coul, pos, wf,configs,g, tau, h_ks,f_ks, ks, kcopy,phonon=T
         rho = np.exp(1j*dprod1) + np.exp(1j*dprod2) #electron density eikr1 + eikr2
         #Update f_k from H_ph and H_eph; [tau] = 1/ha
         fp = f_ks* np.exp(-tau/(2*l**2))
-        f2p = fp - 1j*tau* g/kcopy * np.conj(rho) #f'' = f' - it*g/k* (rho*)
+        f2p = fp - 1j*tau* g/kcopy[:,None] * np.conj(rho) #f'' = f' - it*g/k* (rho*)
     
         #Update weights from H_ph and H_eph, and calculate local energy
-        ph = -1./tau* (np.sum( tau*1j* g * fp/kcopy*rho,axis=0) + np.sum( np.conj(h_ks)*(f2p-f_ks),axis=0) ) #sum over all k-values; coherent state weight contributions are normalized
+        ph = -1./tau* (np.sum( tau*1j* g * fp/kcopy[:,None]*rho,axis=0) + np.sum( np.conj(h_ks)*(f2p-f_ks),axis=0) ) #sum over all k-values; coherent state weight contributions are normalized
     else:
         f2p = np.zeros(f_ks.shape)
         ph = np.zeros(ke_coul.shape)
@@ -88,9 +89,18 @@ def update_f_ks(pos, wf,g, tau, h_ks,f_ks, ks, kcopy,phonon=True):
         #find elec density matrix
         dprod1 = np.matmul(ks,swappos[:,0,:]) #np array for each k value; k dot r1
         dprod2 = np.matmul(ks,swappos[:,1,:]) #k dot r2 
-        rho = np.exp(1j*dprod1) + np.exp(1j*dprod2) #electron density eikr1 + eikr2
+        rho = np.exp(1j*dprod1) + np.exp(1j*dprod2) #electron density eikr1 + eikr2, Nk x Nw
         #Update f_k from H_ph and H_eph; [tau] = 1/ha
-        newf_ks = f_ks* np.exp(-tau/(2*l**2)) - 1j*tau* g/kcopy * np.conj(rho) #f'' = f' - it*g/k* (rho*)
+        newf_ks = f_ks* np.exp(-tau/(2*l**2)) - 1j*tau* g/kcopy[:,None] * np.conj(rho) #f'' = f' - it*g/k* (rho*); None = np.newaxis
+        #print('f_k (pre-update): ', f_ks)
+        #print('t0: ', tau/(2*l**2),np.exp(-tau/(2*l**2)))
+        #print('t1: ', f_ks* np.exp(-tau/(2*l**2)))
+        #print('t2: ', 1j*tau* g/kcopy[:,None] * np.conj(rho)) 
+
+        # normalize phonon amplitudes?
+        #fmags = np.abs(newf_ks)
+        #newf_ks = newf_ks / fmags
+
     else:
         rho = np.zeros((len(ks),pos.shape[0])) 
         newf_ks = np.zeros(f_ks.shape)
@@ -104,7 +114,7 @@ def mixed_estimator(ke_coul, pos, wf, configs, rho, g, h_ks, f_ks, kmag,phonon=T
         ke_coul: kinetic+Coulomb energy for its shape
         pos: electron positions (nelec, ndim, nconfigs)
         rho: electron density (eikr1 + eikr2)
-        kmag: k-vector magnitudes, matrix size (len(ks), nconfigs)
+        kmag: k-vector magnitudes, matrix size (len(ks), nconfigs) or just len(ks) array and replace with kmag[:,None] to broadcast new axis
         h_ks: coherent state amplitudes of trial wave function psi_T (len(ks), nconfigs)
         f_ks: coherent state amplitudes of our time-evolved numerical coherent state |{f_k}>
     Output:
@@ -112,13 +122,21 @@ def mixed_estimator(ke_coul, pos, wf, configs, rho, g, h_ks, f_ks, kmag,phonon=T
     '''
     #Find electron phonon energy
     if phonon == True:
-        H_eph = 1j* g*np.sum( (-f_ks * rho + np.conj(h_ks) *np.conj(rho))/kmag , axis=0) #sum over all k values; f/kmag = (# ks) x nconfigs matrix. See eqn 
+        #H_eph = 1j* g*np.sum( (-f_ks * rho + np.conj(h_ks) *np.conj(rho))/kmag[:,None] , axis=0) #sum over all k values; f/kmag = (# ks) x nconfigs matrix. See eqn 
+        t1 = 1j* g*np.sum( (-f_ks * rho)/kmag[:,None] , axis=0) #sum over all k values; f/kmag = (# ks) x nconfigs matrix. See eqn 
+        t2 = 1j* g*np.sum( ( np.conj(h_ks) *np.conj(rho))/kmag[:,None] , axis=0) #sum over all k values; f/kmag = (# ks) x nconfigs matrix. See eqn 
+        H_eph = t1 + t2
         #find H_ph
         H_ph = 1/(2*l**2) * np.sum(f_ks* np.conj(h_ks),axis=0)
     else:
+        t1 = 0
+        t2 = 0
         H_eph = np.zeros(ke_coul.shape)
         H_ph = np.zeros(ke_coul.shape)
-    return ke_coul + H_eph + H_ph
+    #print('f rho: ', f_ks*rho)
+    #print('sum f rho: ', np.sum(f_ks*rho,axis=0))
+    #print('elph1: ', t1[:10], 'elph2: ',t2[:10], 'ph: ', H_ph[:10], 'KE/coul: ', ke_coul[:10])
+    return t1, t2, H_ph, ke_coul + H_eph + H_ph
 
 def init_f_k(ks, kmag, g, nconfig):
     '''
@@ -130,6 +148,7 @@ def init_f_k(ks, kmag, g, nconfig):
     yopt = 1.39
     sopt = 1.05E-9/a0 #in units of the Bohr radius
     d = yopt*sopt #assume pointing in z direction
+    # -4i gl^2/|k| * exp(-|k|^2 sigma^2/4)(cos(k_y d/2) - exp(-y^2/2) )/(1-exp(-y^2/2))
     f_ks = -4j*g*l**2/kmag* np.exp(-kmag**2 * sopt**2/4) * (np.cos(ks[:,2] * d/2) - np.exp(-yopt**2/2) )/(1- np.exp(-yopt**2/2))
     f_kcopy = np.array([[ f_ks[i] for j in range(nconfig)] for i in range(len(ks))]) #make f_ks array size (# ks) x (# configurations)
     return f_kcopy
@@ -162,7 +181,7 @@ def acceptance(posold, posnew, driftold, driftnew, tau, wf):
 def popcontrol(pos, weight, f_ks, wavg, wtot):
     # keep track of ancestry (which walker numbers of the previous timestep led to the walkers in the current time step)
     probability = np.cumsum(weight / wtot)
-    randnums = np.random.random(pos.shape[0])
+    randnums = np.random.random(pos.shape[0]) #is this array the same over time?
     # determine which walkers get duplicated / killed
     new_indices = np.searchsorted(probability, randnums) #indices at which new walkers should get inserted, i.e. indices of old walkers with probability closest to new ones?
     
@@ -207,11 +226,19 @@ def InitPos(wf,opt='rand',d=None):
         else:
             print('Invalid choice of electron separation distance')
     else:    
-        pos= wf.L* np.random.rand(wf.nconfig, wf.nelec, wf.ndim)
+        print('opt',opt)
+        if os.path.exists(opt) == True:
+            # extract final timepoint positions from any previous simulation with the same number of walkers
+            f = h5py.File(opt,'r')
+            nstep_old = int(f.get('meta/Nsteps')[0,0])
+            arrstep = int(f.get('meta/arrstep')[0,0])
+            pos = np.array(f.get('step%d/pos' %(arrstep*np.floor(nstep_old/arrstep),)))
+        else:
+            pos= wf.L* np.random.rand(wf.nconfig, wf.nelec, wf.ndim)
     return pos
 
 from itertools import product
-def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=None,N=5, L=10,elec=True,phonon=True,l=l,eta=eta_STO,gth=True,h5name="dmc.h5",resumeh5=''):
+def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=None,N=5, L=10,elec=True,phonon=True,l=l,eta=eta_STO,gth=True,h5name="dmc.h5",resumeh5='',save_phonons=0):
     """
   Inputs:
   L: box length (units of a0)
@@ -230,6 +257,8 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
   """
     from time import time
     # use HDF file for large data output
+    # time initial setup
+    tick0 = time()
     if len(resumeh5) > 0: resume = True
     else: resume = False
     print(resume)
@@ -253,7 +282,12 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
     else:
         df = {
             "step": [],
-            "ke_coul": [],
+            "ke": [],
+            "coul": [],
+            "H_eph1": [],
+            "H_eph2": [],
+            "H_ph": [],
+            #'sd_eph': [],
             "elocal": [],
             "egth": [],
             "eref": [],
@@ -283,6 +317,8 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         else:
             pos = np.array(f.get('step%d/pos' %(arrstep*np.floor(nstep_old/arrstep),)))
         weight = np.array(f.get('step%d/weight' %(arrstep*np.floor(nstep_old/arrstep),)))
+        save_phonons = int(f.get('meta/save_phonons')[0,0])
+        
     else:
         nstep_old = 0
         weight = np.ones(nconfig)
@@ -291,7 +327,7 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
     if resume:
         h5file.root.meta.Nsteps[0] = nstep
     else:
-        meta = {'tau': tau, 'l': l, 'eta': eta, 'rs': wf.rs, 'L': L, 'N_cut': N, 'g': g, 'alpha': alpha, 'nconfig': nconfig, 'savestep':savestep, 'popstep':popstep, 'arrstep': arrstep,'elec_bool': elec,'ph_bool': phonon, 'gth_bool': gth, 'tproj': tproj, 'Nsteps': nstep, 'diffusion':int(wf.diffusion) }  # add more as needed
+        meta = {'tau': tau, 'l': l, 'eta': eta, 'rs': wf.rs, 'L': L, 'N_cut': N, 'g': g, 'alpha': alpha, 'nconfig': nconfig, 'savestep':savestep, 'popstep':popstep, 'arrstep': arrstep,'elec_bool': elec,'ph_bool': phonon, 'gth_bool': gth, 'tproj': tproj, 'Nsteps': nstep, 'diffusion':int(wf.diffusion), 'save_phonons': save_phonons }  # add more as needed
         # turn each value into an array
         for key, val in meta.items():
             meta[key] = [val]
@@ -320,6 +356,9 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         idx = np.where(kmag !=0)[0]
         ks = ks[idx]
         kmag = kmag[idx]
+        print('kmag', kmag.min(),kmag.max())
+        debug = tau*g/kmag
+        print('tau g/k',debug.min(),debug.max())
         
         #initialize f_ks
         f_ks = init_f_k(ks, kmag, g, nconfig)
@@ -327,11 +366,12 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         h_ks = f_ks #this describes our trial wave fxn coherent state amplitudes
         #egth,_ = gth_estimator(pos, wf, configs, g, tau,h_ks, f_ks, ks, kcopy,phonon)
     
-    kcopy = np.array([[ kmag[i] for j in range(nconfig)] for i in range(len(kmag))]) # (# ks) x nconfig matrix
+    #kcopy = np.array([[ kmag[i] for j in range(nconfig)] for i in range(len(kmag))]) # (# ks) x nconfig matrix
+    kcopy = kmag
 
     rho, _ = update_f_ks(pos, wf, g, tau, h_ks, f_ks, ks, kcopy,phonon)
     ke_coul = GetEnergy(wf,configs,pos,'total')
-    elocold = mixed_estimator(ke_coul, pos, wf, configs, rho, g, h_ks, f_ks, kcopy,phonon)
+    _,_,_,elocold = mixed_estimator(ke_coul, pos, wf, configs, rho, g, h_ks, f_ks, kcopy,phonon)
 
     eref = np.mean(elocold)
     #eref = -1250 #use for small eta & l combos
@@ -362,11 +402,17 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         ts = range(nstep_old+1,nstep+1)
 
     maxsave = np.floor(max(ts)/arrstep)*arrstep # last timestep at which position arrays are being saved
-    save_phonons = 10*np.maximum(arrstep,popstep) #how frequently to dump phonon amplitude f_k information (do so only after population control) 
-    print(save_phonons)
+    #save_phonons = 10*np.maximum(arrstep,popstep) #how frequently to dump phonon amplitude f_k information (do so only after population control) 
+    print('save phonons every ',save_phonons,' steps')
 
+    tock0 = time()
+    setuptime = tock0-tick0
+    print(f'initialization time: {setuptime}')
     for istep in ts:
+        
         tick = time()
+        if istep % 1000 == 0: 
+            print('step', istep,tick-tick0)
         if elec == True:
             driftold = tau * wf.grad(pos)
 
@@ -389,19 +435,32 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
 
         #compute observables
         tick = time()
-        ke_coul = GetEnergy(wf,configs,pos,'total') #syncs internal wf configs object + driver configs object
-        eloc = mixed_estimator(ke_coul, pos, wf, configs, rho, g, h_ks, f_ks, kcopy,phonon)
+        ke = GetEnergy(wf,configs,pos,'ke') #syncs internal wf configs object + driver configs object
+        coul = GetEnergy(wf,configs,pos,'ee') #syncs internal wf configs object + driver configs object
+        elph1,elph2,H_ph,eloc = mixed_estimator(ke + coul, pos, wf, configs, rho, g, h_ks, f_ks, kcopy,phonon)
         tock = time()
         timers['mixed_estimator'] += tock - tick
         tick = time()
         if gth:
-            egth,_ = gth_estimator(ke_coul, pos, wf, configs, g,tau, h_ks, f_ks, ks, kcopy,phonon)
+            egth,_ = gth_estimator(ke + coul, pos, wf, configs, g,tau, h_ks, f_ks, ks, kcopy,phonon)
         else: egth = np.zeros(eloc.shape)
         tock = time()
         timers['gth_estimator'] += tock - tick
         #syncs internal wf configs object + driver configs object
         f_ks = f2p
-
+        
+        # mechanisms to impose to avoid explosions (in weights)
+         
+        bound = 5/np.sqrt(tau) # some function f(tau) slower than 1/tau to prevent energy from exploding and sim from going crazy
+        ma1 = eloc-eref > bound
+        ma2 = eloc-eref < -bound
+        eloc[ma1] = bound + eref
+        eloc[ma2] = eref - bound
+         
+        ''' 
+        W_B = np.sum(weight)*0.1
+        weight = np.minimum(weight,W_B) #make sure no individual walker weight gets too large so as to take over the population
+        '''
         oldwt = np.mean(weight)
         weight = weight* np.exp(-0.5* tau * (elocold + eloc - 2*eref))
         elocold = eloc
@@ -412,8 +471,13 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         wavg = wtot / nconfig
         if elec == True:
             if istep % popstep == 0:
+                print(istep,'before',pos)
                 pos, f_ks,weight, ancestor_indices = popcontrol(pos, weight, f_ks,wavg, wtot)
+                print('after',pos)
+                print('walkers picked',ancestor_indices)
+                print('wf internal config pre-update: ',configs)
                 wf.update(configs,pos)
+                print('post-update: ',configs)
         tock = time()
         timers['branch'] += tock - tick
 
@@ -421,8 +485,7 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         Delta = -1./tau* np.log(wavg/oldwt) #need to normalize <w_{n+1}>/<w_n>
         eref = eref + Delta
 
-        if istep % 5000 == 0:
-            print(istep)
+        #print(istep)
 
         if istep % savestep == 0:
             dists = np.sqrt(np.sum((pos[:,0,:]-pos[:,1,:])**2,axis=1))
@@ -430,7 +493,12 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
             d_err = np.std(dists)/nconfig
             
             df["step"].append(istep)
-            df["ke_coul"].append(np.mean(ke_coul))
+            df["ke"].append(np.mean(ke))
+            df["coul"].append(np.mean(coul))
+            df["H_eph1"].append(np.mean(elph1))
+            df["H_eph2"].append(np.mean(elph2))
+            #df['sd_eph'].append(np.std(elph1+elph2))
+            df["H_ph"].append(np.mean(H_ph))
             df["elocal"].append(np.mean(eloc))
             df["egth"].append(np.mean(egth))
             df["eref"].append(eref)
@@ -580,13 +648,14 @@ if __name__ == "__main__":
     parser.add_argument('--arrstep',type=int,default=50) # how frequently to save phonon info + interparticle distances
     parser.add_argument('--popstep',type=int,default=200) # how frequently to branch --> comb through existing walkers
     parser.add_argument('--savestep',type=int,default=5) # how frequently to save energy information
+    parser.add_argument('--savephonons',type=int,default=0) # how frequently to save phonon amplitude information
     parser.add_argument('--l',type=np.float64,default=l) #plays the role of the electron coupling strength U 
     parser.add_argument('--eta',type=np.float64,default=eta_STO) 
     parser.add_argument('--gth',type=int,default=1) #on/off switch for growth estimator
     parser.add_argument('--outdir',type=str,default='data') 
     parser.add_argument('--init',type=str,default='bind') 
     parser.add_argument('--tau',type=np.float64)
-    parser.add_argument('--diffusion',type=int,default=0) # on/off switch for diffusion (jellium, no Coulomb). Allowed to have diffusion (i.e. 0 Coulomb) + phonons to try and define a baseline for binding energy calc
+    parser.add_argument('--diffusion',type=int,default=0) # on/off switch for pure diffusion (i.e. 0 Coulomb) + phonons to try and define a baseline for binding energy calc
     parser.add_argument('--resume',type=int,default=0) # whether to resume the simulation from a previous file (if so, give the name of the .h5 file to resume from) 
 
     args = parser.parse_args()
@@ -604,6 +673,7 @@ if __name__ == "__main__":
     elec_bool = args.elec > 0
     gth_bool = args.gth > 0
     diffusion = args.diffusion > 0
+    save_phonons = args.savephonons
     if Nstep is None:
         tproj = args.tproj #projection time = tau * nsteps
         Nstep = int(tproj/tau)
@@ -613,6 +683,10 @@ if __name__ == "__main__":
             Nstep = int(arrstep*np.ceil(Nstep/arrstep))
             print('big arrays (position, phonon amplitudes) are only saved every %d steps, rounding to nearest save point: Nstep = %d' %(arrstep, Nstep))
         tproj = Nstep*tau
+
+    if save_phonons == 0:
+        save_phonons = 10*np.maximum(arrstep,popstep) #how frequently to dump phonon amplitude f_k information (do so only after population control) 
+    print('saveph',save_phonons)
 
     #if diffusion:
     #    ph_bool = 0
@@ -637,19 +711,32 @@ if __name__ == "__main__":
         print('Making data directory...')
         os.mkdir(datadir) 
 
+    # want to make resume feature compatible with e.g. restarting a sim with a different sim step size tau, or initializing a sim with a different sim's final configuration
+
+    
+    if os.path.exists(init) == True:
+        opt = 'pathinit'
+    elif isinstance(init,(int,float)) == True:
+         opt = 'bind'
+    else: opt = init
+    
+    filename = "DMC_{9}_diffusion{10}_el{8}_ph{7}_rs{0}_popsize{1}_seed{2}_N{3}_eta{4:.2f}_l{5:.2f}_nstep{6}_popstep{11}_arrstep{12}".format(r_s, nconfig, seed, N,eta,l,Nstep,int(ph_bool),int(elec_bool),opt,int(diffusion),popstep,arrstep)
+    filename = os.path.join(datadir,filename + '_tau' + str(tau))
+    spl = filename.split('_nstep%d' %Nstep)
+    print('filename',filename)
     # if want to resume from a previous file, find said file first. If file not found, start sim from scratch
     resume = args.resume > 0
+    print('resume',resume)
     if resume:
-        filename = 'DMC_%s_diffusion_%d_el%d_ph%d_rs_%d_popsize_%d_seed_%d_N_%d_eta_%.3f_l_%.2f_nstep_[0-9]*_popstep%d_arrstep%d_tau_%s.h5' %(init,int(diffusion),int(elec_bool), int(ph_bool), r_s,nconfig, seed, N, eta, l,popstep,arrstep,str(tau))
-        results = [x for x in os.listdir(datadir) if re.match(filename,x) and os.path.exists(os.path.join(datadir,os.path.splitext(x)[0]+'.csv'))]
-        print(results)
+        results = [x for x in glob.glob('%s_nstep*%s.h5' %(spl[0],spl[1])) if os.path.exists(os.path.splitext(x)[0]+'.csv')]
+        print('found',results)
         if len(results) == 0:
             resumefile = ''
         else:
-            nsteps = [h5py.File(os.path.join(datadir,name),'r').get('meta/Nsteps')[0,0] for name in results] 
-            print(nsteps)    
+            nsteps = [h5py.File(name,'r').get('meta/Nsteps')[0,0] for name in results] 
+            print('nsteps',nsteps)    
             idx = np.argwhere(nsteps == max(nsteps))[0][0]
-            resumefile = os.path.join(datadir,results[idx])
+            resumefile = results[idx]
             f = h5py.File(resumefile,'r')
             pos = np.array(f.get('step%d/pos' %(arrstep*np.floor(nsteps[idx]/arrstep),)))
             if pos is None: 
@@ -660,14 +747,20 @@ if __name__ == "__main__":
             print(Nstep)
     else: 
         resumefile = ''
+    filename = spl[0] + '_nstep%d' %Nstep + spl[1]
+    h5name = filename + ".h5"
+    print('new save name',h5name)
+    csvname = filename + ".csv"
 
     if len(resumefile) == 0:
-        pos = InitPos(wf,init,d=1) 
+        if isinstance(init,(int,float)) == True:
+            d = init
+            init = 'bind'
+        else: d = 5
+        pos = InitPos(wf,init,d=d)
     
     print('resume file',resumefile)
 
-    filename = "DMC_{9}_diffusion{10}_el{8}_ph{7}_rs_{0}_popsize_{1}_seed_{2}_N_{3}_eta_{4:.3f}_l_{5:.2f}_nstep_{6}_popstep{11}_arrstep{12}".format(r_s, nconfig, seed, N,eta,l,Nstep,int(ph_bool),int(elec_bool),init,int(diffusion),popstep,arrstep)
-    print(filename)
     print('elec',elec_bool)
     print('ph',ph_bool)
     print('gth',gth_bool)
@@ -679,10 +772,6 @@ if __name__ == "__main__":
     #print('Feyn',feyn)
     np.random.seed(seed)
     tic = time.perf_counter()
-    filename = os.path.join(datadir,filename + '_tau_' + str(tau))
-    h5name = filename + ".h5"
-    print(h5name)
-    csvname = filename + ".csv"
         
     df = simple_dmc(
         wf,
@@ -701,9 +790,10 @@ if __name__ == "__main__":
         arrstep = arrstep,
         savestep = savestep,
         resumeh5 = resumefile,
+        save_phonons = save_phonons,
     )
     df.to_csv(csvname, index=False)
-       
+    
     toc = time.perf_counter()
     print(f"time taken: {toc-tic:0.4f} s, {(toc-tic)/60:0.3f} min")
 
