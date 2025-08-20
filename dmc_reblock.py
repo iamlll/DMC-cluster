@@ -94,7 +94,8 @@ def ReblockEnergies(filenames,tequil=100,blocksize=1):
         dfreblock.append(dictionary)
 
     dfreblock = pd.DataFrame(dfreblock)
-    print('mean: %.4f, sd: %.4f' %(dfreblock['eavg'].values, dfreblock['err'].values))
+    print(dfreblock)
+    print('mean: {}, sd: {}'.format(np.mean(dfreblock['eavg'].values), 1/len(dfreblock)*np.sqrt(np.sum(dfreblock['err'].values**2))))
     dirname = os.path.dirname(filenames[0]) # take directory of 1st file as output dir
     savename = os.path.join(dirname,"reblocked_eta%.2f_l%.2f_tequil%d.csv" %(eta,ll,tequil))
     print(savename)
@@ -126,6 +127,6 @@ if __name__ == '__main__':
     filenames = sys.argv[1:]
     #warmup=1000
     # equilibration time = timestep * (# steps thrown out)
-    tequil = 4000 
+    tequil = 500 
     ReblockEnergies(filenames,tequil)
     #CalcBindingEnergy(filenames) #read in reblocked csv 

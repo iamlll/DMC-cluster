@@ -6,6 +6,7 @@ from scipy.optimize import curve_fit
 import os
 import h5py
 import re
+from grscript import extract_walkers
 
 def FindMostRecentFile(datadir):
     ''' find files corresponding to each seed with the max number of sim steps'''
@@ -315,7 +316,6 @@ def CalculateCorrelationFxn(filename,tequil):
     plt.show()    
 
 def Elec_positions(filenames,tequil=None):
-    from grscript import extract_walkers
     # given a folder name, pick out all the different files / seeds corresponding to the largest number of simulation steps
      
     for i,name in enumerate(filenames):
@@ -359,7 +359,7 @@ def Elec_positions(filenames,tequil=None):
 
         # plot trajectories for walkers 1-10
         fig,ax = plt.subplots(layout='constrained')
-        n = 2
+        n = 430
         wx0 = posa[:,n,0,:]/L #Nt x 3, walker 0
         wx1 = posa[:,n,1,:]/L #Nt x 3, walker 0
         #wx0 = np.mean(posa[:,:,0,:],axis=1)/L #average over all walkers
@@ -391,6 +391,63 @@ def Elec_positions(filenames,tequil=None):
         #a.plot(posa[nt,:,0,0]/L,posa[nt,:,0,1]/L,posa[nt,:,0,2]/L,'.',label='e0')
         #a.plot(posa[nt,:,1,0]/L,posa[nt,:,1,1]/L,posa[nt,:,1,2]/L,'.',label='e1')
         #a.legend()
+
+    plt.show()
+
+def Elec_COM_rel_positions(filenames,n=None):
+     
+    for i,name in enumerate(filenames):
+        h = h5py.File(os.path.splitext(name)[0] + '.h5','r')
+
+        #print(h['meta'])
+        tau = h.get('meta/tau')[0,0]
+        print('tau',tau)
+        Nw = h.get('meta/nconfig')[0,0]
+        print('num walkers',Nw)
+        Nsteps = h.get('meta/Nsteps')[0,0]
+        L = h.get('meta/L')[0,0]
+        print('done collecting variables')
+
+        # extract unwrapped positions
+        steps, posa, wts = extract_walkers(h, nevery=1,nequil=0,opt=False)
+        sortid = np.argsort(steps)
+        posa = posa[sortid,:,:,:] # Nt x Nw x Nelec x Ndim
+        wts = wts[sortid,:] # Nt x Nw
+
+        # calculate center of mass of the electrons, as well as their relative distances (unwrapped)
+        R = np.sum(posa,axis=2)/2 # can watch as the bipolaron or whatever diffuses around the box
+        d = posa[:,:,0,:] - posa[:,:,1,:] # extent of anisotropy of the bound state
+        R2 = np.sum(np.sum(R**2,axis=2)*wts, axis=1) / np.sum(wts, axis=1) # Nt
+        d2 = np.sum(np.sum(d**2,axis=2)*wts, axis=1) / np.sum(wts, axis=1) # Nt length vector
+        R2 = np.sqrt(R2)
+        d2 = np.sqrt(d2)
+
+        #nconf, nwalker, nelec, ndim = posa.shape
+        ts = steps[sortid]*tau
+        ts = np.sqrt(ts)
+
+        # plot trajectories for an ind. walker
+        fig,ax = plt.subplots(1,1,layout='constrained')
+        ax.set_xlabel('$t^{1/2}$')
+        ax.plot(ts,R2,label='$\\sqrt{R^2}$')
+        ax.plot(ts,d2,label='$\\sqrt{d^2}$')
+        ax.set_ylabel('length')
+        ax.legend()
+
+        f = plt.figure(layout='constrained')
+        a = f.add_subplot(121,projection='3d')
+        b = f.add_subplot(122,projection='3d')
+        # plot trajectories in 3d
+        if n is not None:
+            a.plot(R[:,n,0],R[:,n,1],R[:,n,2],label='COM')
+            b.plot(d[:,n,0],d[:,n,1],d[:,n,2],label='rel') 
+        else:
+            R = np.mean(R,axis=1)
+            d = np.mean(d,axis=1)
+            a.plot(R[:,0],R[:,1],R[:,2],label='COM')
+            b.plot(d[:,0],d[:,1],d[:,2],label='rel') 
+        a.legend()
+        b.legend()
 
     plt.show()
 
@@ -594,11 +651,12 @@ if __name__=="__main__":
     tequil=0 #for rs=30
     #E_vs_var(filenames,xvar='1/nconfig',comp=True)
 
-    #E_timelapse(sys.argv[1:],tequil=0,sqrtt=True)
+    E_timelapse(sys.argv[1:],tequil=0,sqrtt=False)
     #PlotAccRatioHist(sys.argv[1])
 
     #Elec_sep_dist(sys.argv[1:],fit=False,tequil=tequil,avg=False)
-    Elec_positions(sys.argv[1:],tequil=None)
+    #Elec_positions(sys.argv[1:],tequil=None)
+    #Elec_COM_rel_positions(sys.argv[1:],n=100)
     #JelliumComp()
     #PhononMomDensityTimelapse(filenames,k=1)
     #CalculateCorrelationFxn(sys.argv[1],tequil)

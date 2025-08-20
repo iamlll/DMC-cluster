@@ -21,9 +21,9 @@ module load python
 module list
 
 date
+python -u testphonons.py --eta 0.2 --l 50 --Ncut 15 --nconf 128 --rs 4 --tproj 128 --tau .1 --outdir rs_comp > rs4.out & #forces command to run in backgro
+python -u testphonons.py --eta 0.2 --l 50 --Ncut 15 --nconf 32 --rs 4 --tproj 128 --tau .1 --outdir rs_comp > rs4.out & #forces command to run in backgro
 python -u testphonons.py --eta 0.2 --l 50 --Ncut 15 --nconf 512 --rs 4 --tproj 128 --tau .1 --outdir rs_comp > rs4.out & #forces command to run in backgro
-python -u testphonons.py --eta 0.2 --l 50 --Ncut 15 --nconf 512 --rs 90 --tproj 128 --tau .1 --outdir rs_comp > rs4.out & #forces command to run in backgro
-python -u testphonons.py --eta 0 --l 1 --Ncut 15 --nconf 512 --rs 4 --tproj 128 --tau .1 --outdir rs_comp > rs4.out & #forces command to run in backgro
 python -u testphonons.py --eta 0 --l 1 --Ncut 15 --nconf 512 --rs 90 --tproj 128 --tau .1 --outdir rs_comp > rs4.out & #forces command to run in backgro
 
 wait
