@@ -1,6 +1,6 @@
 import numpy as np
-import pyqmc.energy as energy
-import pyqmc.ewald as ewald
+import pyqmc.observables.energy as energy
+import pyqmc.observables.ewald as ewald
 #import pyqmc.eval_ecp as eval_ecp
 # copy from pyqmc.accumulators
 #  zero out ei, ii, ecp_val

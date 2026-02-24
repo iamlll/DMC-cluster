@@ -7,10 +7,11 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from pyscf.pbc import gto as pbcgto
 import pyqmc
-from pyqmc.coord import PeriodicConfigs 
+from pyqmc.configurations.coord import PeriodicConfigs 
+#from pyqmc.coord import PeriodicConfigs 
 from wffiles.egas import EnergyAccumulator
 from pyqmc.wftools import generate_jastrow, default_jastrow_basis
-import pyqmc.jastrowspin as jastrowspin
+import pyqmc.wf.jastrowspin as jastrowspin
 import pyqmc.gpu as gpu
 import copy
 import os
@@ -36,7 +37,9 @@ class UpdatedJastrow(jastrowspin.JastrowSpin):
         # ee Jastrow (only bcoeff for ee, no acoeff for ei)
         ion_cusp = []
         abasis, bbasis = default_jastrow_basis(cell, len(ion_cusp) > 0, na=0, nb=3, rcut=None)
-        super().__init__(cell,a_basis=abasis, b_basis=bbasis)
+        print('abasis',abasis) # returns empty array []
+        print('bbasis',bbasis)
+        super().__init__(cell,a_basis=abasis, b_basis=bbasis) # refuses to initialize
         self.parameters["bcoeff"][0, [0, 1, 2]] = gpu.cp.array([-0.25, -0.50, -0.25])
         print(self._nelec)
         self.accumulator = {"energy": EnergyAccumulator(cell)} #energy accumulator, dict object storing energy info
