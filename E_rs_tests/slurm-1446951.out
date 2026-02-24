@@ -1,0 +1,29 @@
+Date              = Tue Jun 21 14:37:45 EDT 2022
+Hostname          = worker1057
+Working Directory = /mnt/ceph/users/llin1/E_rs_tests
+
+Number of Nodes Allocated = 1
+Number of Tasks Allocated = 8
+
+Currently Loaded Modules:
+  1) modules/1.58-20220124     (S)   4) pyscf/2.0.1
+  2) gcc/7.5.0                       5) slurm         (S)
+  3) intel-oneapi-mkl/2022.0.1 (S)   6) python/3.8.12
+
+  Where:
+   S:  Module is Sticky, requires --force to unload or purge
+
+ 
+
+Tue Jun 21 14:37:47 EDT 2022
+.csv
+0.05 44
+.csv
+0.1 44
+.csv
+0.15 43
+.csv
+0.2 44
+.csv
+0.4 44
+slurmstepd: error: *** JOB 1446951 ON worker1057 CANCELLED AT 2022-06-21T14:37:52 ***
