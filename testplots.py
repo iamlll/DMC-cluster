@@ -359,7 +359,7 @@ def Elec_positions(filenames,tequil=None):
 
         # plot trajectories for walkers 1-10
         fig,ax = plt.subplots(layout='constrained')
-        n = 430
+        n = 43
         wx0 = posa[:,n,0,:]/L #Nt x 3, walker 0
         wx1 = posa[:,n,1,:]/L #Nt x 3, walker 0
         #wx0 = np.mean(posa[:,:,0,:],axis=1)/L #average over all walkers
@@ -651,11 +651,11 @@ if __name__=="__main__":
     tequil=0 #for rs=30
     #E_vs_var(filenames,xvar='1/nconfig',comp=True)
 
-    E_timelapse(sys.argv[1:],tequil=0,sqrtt=False)
+    #E_timelapse(sys.argv[1:],tequil=0,sqrtt=False)
     #PlotAccRatioHist(sys.argv[1])
 
     #Elec_sep_dist(sys.argv[1:],fit=False,tequil=tequil,avg=False)
-    #Elec_positions(sys.argv[1:],tequil=None)
+    Elec_positions(sys.argv[1:],tequil=None)
     #Elec_COM_rel_positions(sys.argv[1:],n=100)
     #JelliumComp()
     #PhononMomDensityTimelapse(filenames,k=1)
