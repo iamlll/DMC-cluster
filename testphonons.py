@@ -191,6 +191,21 @@ def popcontrol(pos, weight, f_ks, wavg, wtot):
     weight.fill(wavg)
     return posnew, newf_ks, weight, new_indices
 
+def popcontrol_v3(configs, pos, weights, f_ks):
+    nconfig = pos.shape[0]
+    probability = np.cumsum(weights)
+    wtot = probability[-1]
+    base = np.random.rand()
+    comb = (base + np.linspace(0, wtot, nconfig, endpoint=False))
+    newinds = np.searchsorted(
+        probability, comb % wtot
+    )
+    configs.resample(newinds)
+    weights.fill(wtot / nconfig)
+
+    newf_ks = f_ks[:, newinds]
+    return pos[newinds,:], newf_ks, weights, newinds
+
 def plotamps(kcopy, n_ks, N):
     # f_ks: (# ks) x (nconfig) array of coherent state amplitudes. Want to make histogram of f_ks vs |k| for final config of f_ks.
     fig,ax = plt.subplots(2,1)
@@ -476,9 +491,10 @@ def simple_dmc(wf, tau, pos, popstep=10,savestep=5, arrstep=10,tproj=128, nstep=
         wavg = wtot / nconfig
         if elec == True:
             if istep % popstep == 0:
-                pos, f_ks,weight, ancestor_indices = popcontrol(pos, weight, f_ks,wavg, wtot)
+                #pos, f_ks,weight, ancestor_indices = popcontrol(pos, weight, f_ks,wavg, wtot)
                 print(istep,'before',pos)
                 #pos, f_ks,weight, ancestor_indices = popcontrol(pos, weight, f_ks,wavg, wtot)
+                pos, f_ks,weight, ancestor_indices = popcontrol_v3(configs,pos, weight, f_ks)
                 print('after',pos)
                 print('walkers picked',ancestor_indices)
                 print('wf internal config pre-update: ',configs)
