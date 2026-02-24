@@ -92,7 +92,7 @@ def update_f_ks(pos, wf,g, tau, h_ks,f_ks, ks, kcopy,phonon=True):
         rho = np.exp(1j*dprod1) + np.exp(1j*dprod2) #electron density eikr1 + eikr2, Nk x Nw
         #Update f_k from H_ph and H_eph; [tau] = 1/ha
         newf_ks = f_ks* np.exp(-tau/(2*l**2)) - 1j*tau* g/kcopy[:,None] * np.conj(rho) #f'' = f' - it*g/k* (rho*); None = np.newaxis
-        # Alex suggestion: replace 1/|k| with k/|k|^2
+        # Alex suggestion: replace 1/|k| with \vec k/|k|^2
         #newf_ks = f_ks* np.exp(-tau/(2*l**2)) - 1j*tau* g * ks/kcopy[:,None]**2 * np.conj(rho) #f'' = f' - it*g/k* (rho*); None = np.newaxis
         #print('f_k (pre-update): ', f_ks)
         #print('t0: ', tau/(2*l**2),np.exp(-tau/(2*l**2)))
